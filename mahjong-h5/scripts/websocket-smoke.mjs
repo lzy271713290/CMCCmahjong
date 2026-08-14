@@ -1,8 +1,10 @@
 import WebSocket from "ws";
 
+const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
+
 function open() {
   return new Promise((resolve, reject) => {
-    const socket = new WebSocket("ws://127.0.0.1:3000/ws");
+    const socket = new WebSocket(serverUrl);
     socket.once("open", () => resolve(socket));
     socket.once("error", reject);
   });
@@ -58,6 +60,7 @@ first.send(JSON.stringify({ type: "start_game" }));
 const gameStarted = await gameStartedWait;
 
 const result = {
+  serverUrl,
   roomCodeLength: created.roomCode.length,
   playerCount: twoPlayers.snapshot.players.length,
   disconnectObserved: offline.snapshot.players.find((player) => player.id === joined.playerId)?.connected === false,
