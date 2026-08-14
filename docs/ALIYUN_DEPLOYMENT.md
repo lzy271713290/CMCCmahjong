@@ -58,7 +58,7 @@ pnpm install --frozen-lockfile
 pnpm test
 ```
 
-十二项自动测试全部通过后，启动服务：
+十五项自动测试全部通过后，启动服务：
 
 ```bash
 cd /opt/CMCCmahjong/mahjong-h5
@@ -193,10 +193,10 @@ grep '"event":"game_model_initialized"' logs/server.jsonl | tail -n 20
 
 正常 JSON 日志应包含 `"modelVersion":"private-hands-v1"`、`"wallRemaining":83` 和 `"totalTiles":136`；`handTileCounts` 中应恰好一家14张、三家13张。日志不会记录具体手牌。
 
-验证私有发牌、重连恢复和首次出牌监控事件：
+验证私有发牌、重连恢复、出牌、自动响应与回合推进监控事件：
 
 ```bash
-grep -E '"event":"(private_hands_distributed|private_hand_restored|tile_discarded)"' logs/server.jsonl | tail -n 30
+grep -E '"event":"(private_hands_distributed|private_hand_restored|tile_discarded|reaction_window_resolved|test_player_auto_discarded|turn_advanced)"' logs/server.jsonl | tail -n 50
 ```
 
 从开发电脑对公网服务执行完整 WebSocket 冒烟测试：
@@ -206,6 +206,6 @@ cd mahjong-h5
 node scripts/websocket-smoke.mjs ws://服务器公网IP:3000/ws
 ```
 
-命令退出码为0，并返回 `"gamePhase":"playing"`、`"wallRemaining":83` 以及一家14张/三家13张的 `handTileCounts`，表示最小模型公网流程通过。
+命令退出码为0，并返回 `"gamePhase":"playing"`、`"wallAfterFirstDiscard":82`、`"wallAfterSecondDiscard":81`、`"discardCountAfterSecondTurn":2`，以及两个静态美术资源的正确 MIME/字节数，表示最小回合和横屏牌桌资源的公网流程通过。
 
 日志包含服务实例 ID、进程 PID、房间号、人数、操作和错误码，不记录玩家身份令牌。把相关行复制出来即可协助定位“服务是否重启”“请求是否进入同一实例”“房间为何不存在”等问题。

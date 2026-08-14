@@ -13,10 +13,11 @@ export type InitialGameState = {
   roundNumber: 1;
   dealerSeat: number;
   turnSeat: number;
-  stage: "awaiting_discard" | "awaiting_reactions";
+  stage: "awaiting_discard" | "awaiting_reactions" | "round_ended";
   hands: Map<number, Tile[]>;
   wall: Tile[];
   discards: DiscardView[];
+  lastDraw?: { seat: number; tile: Tile };
 };
 
 const NUMBERED_SUITS: NumberedSuit[] = ["wan", "tong", "tiao"];
@@ -66,12 +67,13 @@ export function createInitialGame(
 
   const wall = shuffleTiles(createFullTileSet(), randomIndex);
   const hands = new Map(seats.map((seat) => [seat, [] as Tile[]]));
-  const draw = (seat: number, count: number): void => {
+  const draw = (seat: number, count: number): Tile[] => {
     const hand = hands.get(seat);
     if (!hand) throw new Error("发牌目标座位不存在");
     const tiles = wall.splice(0, count);
     if (tiles.length !== count) throw new Error("牌墙数量不足，无法完成发牌");
     hand.push(...tiles);
+    return tiles;
   };
 
   // 模拟线下发牌：三轮每人四张，再各发一张，庄家额外取得首张出牌。
@@ -79,7 +81,7 @@ export function createInitialGame(
     for (const seat of seats) draw(seat, 4);
   }
   for (const seat of seats) draw(seat, 1);
-  draw(dealerSeat, 1);
+  const dealerDraw = draw(dealerSeat, 1)[0]!;
 
   const game: InitialGameState = {
     modelVersion: GAME_MODEL_VERSION,
@@ -90,9 +92,26 @@ export function createInitialGame(
     hands,
     wall,
     discards: [],
+    lastDraw: { seat: dealerSeat, tile: dealerDraw },
   };
   validateInitialGame(game);
   return game;
+}
+
+export function drawTileFromWall(game: InitialGameState, seat: number): Tile | undefined {
+  const tile = game.wall.shift();
+  if (!tile) {
+    game.stage = "round_ended";
+    game.lastDraw = undefined;
+    return undefined;
+  }
+  const hand = game.hands.get(seat);
+  if (!hand) throw new Error("摸牌目标座位不存在");
+  hand.push(tile);
+  game.turnSeat = seat;
+  game.stage = "awaiting_discard";
+  game.lastDraw = { seat, tile };
+  return tile;
 }
 
 export function validateInitialGame(game: InitialGameState): void {

@@ -1,9 +1,13 @@
-import type { DiscardView, RoomSnapshot, ServerMessage, TileCode } from "../../shared/protocol.js";
+import type { PlayerView, RoomSnapshot, ServerMessage, TileCode } from "../../shared/protocol.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
+type TablePosition = "bottom" | "right" | "top" | "left";
 
+const positions: TablePosition[] = ["bottom", "right", "top", "left"];
+const winds = ["东", "南", "西", "北"];
 const lobby = required<HTMLElement>("lobby");
 const room = required<HTMLElement>("room");
+const gameScreen = required<HTMLElement>("game-screen");
 const nameInput = required<HTMLInputElement>("name");
 const codeInput = required<HTMLInputElement>("room-code");
 const createButton = required<HTMLButtonElement>("create");
@@ -11,18 +15,20 @@ const joinButton = required<HTMLButtonElement>("join");
 const readyButton = required<HTMLButtonElement>("ready");
 const fillTestButton = required<HTMLButtonElement>("fill-test");
 const startButton = required<HTMLButtonElement>("start");
-const gameStatus = required<HTMLElement>("game-status");
-const gameSummary = required<HTMLElement>("game-summary");
-const gameTable = required<HTMLElement>("game-table");
-const turnStatus = required<HTMLElement>("turn-status");
-const wallStatus = required<HTMLElement>("wall-status");
-const latestDiscard = required<HTMLElement>("latest-discard");
-const selfHand = required<HTMLElement>("self-hand");
 const copyButton = required<HTMLButtonElement>("copy");
 const currentCode = required<HTMLElement>("current-code");
+const gameRoomCode = required<HTMLElement>("game-room-code");
+const roundLabel = required<HTMLElement>("round-label");
 const seats = required<HTMLElement>("seats");
+const tableSeats = required<HTMLElement>("table-seats");
+const selfHand = required<HTMLElement>("self-hand");
+const wallStatus = required<HTMLElement>("wall-status");
+const turnStatus = required<HTMLElement>("turn-status");
+const centerConsole = required<HTMLElement>("center-console");
 const notice = required<HTMLElement>("notice");
+const gameNotice = required<HTMLElement>("game-notice");
 const connection = required<HTMLElement>("connection");
+const gameConnection = required<HTMLElement>("game-connection");
 
 let socket: WebSocket;
 let saved = loadSession();
@@ -80,9 +86,24 @@ function handleMessage(message: ServerMessage): void {
 
 function render(next: RoomSnapshot): void {
   snapshot = next;
+  const me = next.players.find((player) => player.id === saved?.playerId);
+  const isPlaying = next.phase === "playing" && Boolean(next.game);
+  document.body.classList.toggle("in-game", isPlaying);
   lobby.classList.add("hidden");
-  room.classList.remove("hidden");
+  room.classList.toggle("hidden", isPlaying);
+  gameScreen.classList.toggle("hidden", !isPlaying);
   currentCode.textContent = next.roomCode;
+  gameRoomCode.textContent = next.roomCode;
+
+  if (isPlaying && next.game) {
+    renderTable(next, me);
+    return;
+  }
+
+  renderWaitingRoom(next, me);
+}
+
+function renderWaitingRoom(next: RoomSnapshot, me: PlayerView | undefined): void {
   seats.replaceChildren();
   for (let seat = 0; seat < 4; seat += 1) {
     const player = next.players.find((candidate) => candidate.seat === seat);
@@ -91,74 +112,155 @@ function render(next: RoomSnapshot): void {
     card.innerHTML = player
       ? `<div class="seat-head"><span>${seat + 1}号位${player.isHost ? " · 房主" : player.isTestPlayer ? " · 测试" : ""}</span><span class="${player.ready ? "ready" : ""}">${player.connected ? (player.ready ? "已准备" : "在线") : "暂离"}</span></div><span class="seat-name"></span>`
       : `<div class="seat-head"><span>${seat + 1}号位</span></div><span class="seat-name">等待加入</span>`;
-    const name = card.querySelector<HTMLElement>(".seat-name");
-    if (name && player) name.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
-    if (player && next.game) {
-      const handCount = document.createElement("span");
-      handCount.className = "hand-count";
-      handCount.textContent = `${next.game.handTileCounts[player.seat] ?? 0}张${player.seat === next.game.dealerSeat ? " · 庄" : ""}`;
-      card.append(handCount);
-    }
+    const playerName = card.querySelector<HTMLElement>(".seat-name");
+    if (playerName && player) playerName.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
     seats.append(card);
   }
-  const me = next.players.find((player) => player.id === saved?.playerId);
   readyButton.textContent = me?.ready ? "取消准备" : "准备";
-  const isPlaying = next.phase === "playing";
   const canStart = Boolean(me?.isHost && next.players.length === 4 && next.players.every((player) => player.ready));
-  readyButton.classList.toggle("hidden", isPlaying);
-  fillTestButton.classList.toggle("hidden", isPlaying || !me?.isHost || next.players.length >= 4);
-  startButton.classList.toggle("hidden", isPlaying || !canStart);
-  gameStatus.classList.toggle("hidden", !isPlaying);
-  gameTable.classList.toggle("hidden", !isPlaying);
-  if (next.game) {
-    gameSummary.textContent = `第${next.game.roundNumber}局 · ${next.game.dealerSeat + 1}号位庄家 · 手牌 ${next.game.handTileCounts.join("/")} · 牌墙剩余${next.game.wallRemaining}张`;
-    turnStatus.textContent =
-      next.game.stage === "awaiting_reactions"
-        ? "等待其他玩家响应弃牌"
-        : next.game.turnSeat === next.game.viewerSeat
-          ? "轮到你首次出牌"
-          : `等待${next.game.turnSeat + 1}号位首次出牌`;
-    wallStatus.textContent = `牌墙 ${next.game.wallRemaining} 张`;
-    renderLatestDiscard(next.game.latestDiscard);
-    renderSelfHand(next.game.selfHand ?? [], next.game.stage === "awaiting_discard" && next.game.turnSeat === next.game.viewerSeat);
+  fillTestButton.classList.toggle("hidden", !me?.isHost || next.players.length >= 4);
+  startButton.classList.toggle("hidden", !canStart);
+}
+
+function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
+  const game = next.game!;
+  const viewerSeat = game.viewerSeat ?? me?.seat ?? 0;
+  roundLabel.textContent = `第${game.roundNumber}局 · ${winds[(viewerSeat - game.dealerSeat + 4) % 4]}位视角`;
+  wallStatus.textContent = String(game.wallRemaining);
+  renderPlayers(next, viewerSeat);
+  renderWalls(game.wallRemaining);
+  renderDiscards(game.discards, viewerSeat);
+  renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
+
+  const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
+  if (game.stage === "round_ended") {
+    turnStatus.textContent = "牌墙已空 · 本局流局";
+  } else if (canDiscard) {
+    turnStatus.textContent = "轮到你 · 请选择一张牌";
+  } else if (game.stage === "awaiting_reactions") {
+    turnStatus.textContent = "正在结算响应";
+  } else {
+    const current = next.players.find((player) => player.seat === game.turnSeat);
+    turnStatus.textContent = `等待 ${current?.name ?? `${game.turnSeat + 1}号位`} 出牌`;
+  }
+  renderSelfHand(game.selfHand ?? [], game.selfDrawnTile, canDiscard);
+}
+
+function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
+  const game = next.game!;
+  tableSeats.replaceChildren();
+  for (const player of next.players) {
+    const position = positionForSeat(player.seat, viewerSeat);
+    const playerSeat = document.createElement("div");
+    playerSeat.className = `player-seat seat-${position}${game.turnSeat === player.seat ? " active" : ""}${player.connected ? "" : " offline"}`;
+
+    const avatar = document.createElement("div");
+    avatar.className = "avatar";
+    avatar.textContent = Array.from(player.name)[0] ?? "麻";
+    const info = document.createElement("div");
+    info.className = "player-info";
+    const role = player.seat === game.dealerSeat ? "庄" : winds[(player.seat - game.dealerSeat + 4) % 4];
+    info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张${player.isTestPlayer ? " · 托管" : ""}</span>`;
+    info.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+    playerSeat.append(avatar, info);
+
+    if (position !== "bottom") {
+      const rack = document.createElement("div");
+      rack.className = "opponent-rack";
+      const handCount = game.handTileCounts[player.seat] ?? 0;
+      for (let tile = 0; tile < handCount; tile += 1) rack.append(createTileBack());
+      playerSeat.append(rack);
+    }
+    tableSeats.append(playerSeat);
   }
 }
 
-function renderSelfHand(tiles: TileCode[], canDiscard: boolean): void {
+function renderWalls(remaining: number): void {
+  const visibleBacks = Math.ceil((remaining / 83) * 40);
+  positions.forEach((position, wallIndex) => {
+    const wall = required<HTMLElement>(`wall-${position}`);
+    wall.replaceChildren();
+    for (let tileIndex = 0; tileIndex < 10; tileIndex += 1) {
+      const tile = createTileBack();
+      if (wallIndex * 10 + tileIndex >= visibleBacks) tile.classList.add("consumed");
+      wall.append(tile);
+    }
+  });
+}
+
+function renderDiscards(discards: Array<{ seat: number; tile: TileCode }>, viewerSeat: number): void {
+  for (const position of positions) required<HTMLElement>(`discards-${position}`).replaceChildren();
+  discards.forEach((discard, index) => {
+    const zone = required<HTMLElement>(`discards-${positionForSeat(discard.seat, viewerSeat)}`);
+    const tile = createFaceTile(discard.tile, "discard", false);
+    if (index === discards.length - 1) tile.classList.add("latest");
+    zone.append(tile);
+  });
+}
+
+function renderCenter(dealerSeat: number, turnSeat: number, viewerSeat: number): void {
+  centerConsole.className = `center-console active-${positionForSeat(turnSeat, viewerSeat)}`;
+  positions.forEach((position, relativeSeat) => {
+    const absoluteSeat = (viewerSeat + relativeSeat) % 4;
+    required<HTMLElement>(`wind-${position}`).textContent = winds[(absoluteSeat - dealerSeat + 4) % 4]!;
+  });
+}
+
+function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canDiscard: boolean): void {
   selfHand.replaceChildren();
-  for (const code of tiles) {
-    const tile = document.createElement("button");
-    tile.type = "button";
-    tile.className = `mahjong-tile ${tileClass(code)}`;
-    tile.textContent = tileDisplayLabel(code);
-    tile.setAttribute("aria-label", tileLabel(code));
-    tile.disabled = !canDiscard;
-    if (canDiscard) tile.addEventListener("click", () => send({ type: "discard_tile", tile: code }));
+  const hand = [...tiles];
+  let drawn: TileCode | undefined;
+  if (drawnTile) {
+    const index = hand.lastIndexOf(drawnTile);
+    if (index >= 0) drawn = hand.splice(index, 1)[0];
+  }
+  for (const code of hand) selfHand.append(createFaceTile(code, "hand", canDiscard));
+  if (drawn) {
+    const tile = createFaceTile(drawn, "hand", canDiscard);
+    tile.classList.add("drawn");
     selfHand.append(tile);
   }
 }
 
-function renderLatestDiscard(discard: DiscardView | undefined): void {
-  const oldTile = latestDiscard.querySelector(".mahjong-tile, .discard-placeholder");
-  oldTile?.remove();
-  const tile = document.createElement("div");
-  if (discard) {
-    const code = discard.tile;
-    tile.className = `mahjong-tile ${tileClass(code)}`;
-    tile.textContent = tileDisplayLabel(code);
-    tile.setAttribute("aria-label", tileLabel(code));
-  } else {
-    tile.className = "discard-placeholder";
-    tile.textContent = "暂无弃牌";
+function createFaceTile(code: TileCode, size: "hand" | "discard", interactive: boolean): HTMLElement {
+  const tile = document.createElement(interactive ? "button" : "div");
+  if (tile instanceof HTMLButtonElement) {
+    tile.type = "button";
+    tile.addEventListener("click", () => {
+      selfHand.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
+      send({ type: "discard_tile", tile: code });
+      showNotice(`已打出 ${tileLabel(code)}`);
+    });
   }
-  latestDiscard.append(tile);
+  tile.className = `tile-shell ${size}-tile`;
+  tile.setAttribute("aria-label", tileLabel(code));
+  tile.title = tileLabel(code);
+  const face = document.createElement("span");
+  face.className = "tile-face";
+  const index = tileSpriteIndex(code);
+  face.style.backgroundPosition = `${-Math.floor(index / 6) * 55}px ${-(index % 6) * 84}px`;
+  tile.append(face);
+  return tile;
 }
 
-function tileClass(code: TileCode): string {
-  if (code.startsWith("wan-")) return "wan";
-  if (code.startsWith("tong-")) return "tong";
-  if (code.startsWith("tiao-")) return "tiao";
-  return "honor";
+function createTileBack(): HTMLElement {
+  const back = document.createElement("span");
+  back.className = "tile-back";
+  return back;
+}
+
+function tileSpriteIndex(code: TileCode): number {
+  const [suit, rawRank] = code.split("-");
+  const rank = Number(rawRank);
+  if (suit === "tiao") return rank;
+  if (suit === "wan") return 9 + rank;
+  if (suit === "tong") return 18 + rank;
+  const honors: Record<string, number> = { green: 28, red: 30, white: 31, east: 32, north: 33, south: 34, west: 35 };
+  return honors[code] ?? 31;
+}
+
+function positionForSeat(seat: number, viewerSeat: number): TablePosition {
+  return positions[(seat - viewerSeat + 4) % 4]!;
 }
 
 function tileLabel(code: TileCode): string {
@@ -170,14 +272,11 @@ function tileLabel(code: TileCode): string {
   return `${ranks[Number(rawRank)] ?? rawRank}${suits[suit ?? ""] ?? ""}`;
 }
 
-function tileDisplayLabel(code: TileCode): string {
-  const label = tileLabel(code);
-  return label.length === 2 ? `${label[0]}\n${label[1]}` : label;
-}
-
 function showLobby(): void {
   snapshot = undefined;
+  document.body.classList.remove("in-game");
   room.classList.add("hidden");
+  gameScreen.classList.add("hidden");
   lobby.classList.remove("hidden");
 }
 
@@ -191,12 +290,15 @@ function loadSession(): SavedSession | undefined {
 }
 
 function setConnection(text: string, online: boolean): void {
-  connection.textContent = text;
-  connection.classList.toggle("offline", !online);
+  for (const indicator of [connection, gameConnection]) {
+    indicator.textContent = text;
+    indicator.classList.toggle("offline", !online);
+  }
 }
 
 function showNotice(text: string): void {
   notice.textContent = text;
+  gameNotice.textContent = text;
 }
 
 createButton.addEventListener("click", () => send({ type: "create_room", name: nameInput.value }));

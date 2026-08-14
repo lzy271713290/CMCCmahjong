@@ -1,6 +1,7 @@
 import WebSocket from "ws";
 
 const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
+const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
 
 function open() {
   return new Promise((resolve, reject) => {
@@ -76,11 +77,24 @@ const gameStarted = gameStartedMessages[0];
 const dealerSeat = gameStarted.snapshot.game?.dealerSeat;
 const dealerIndex = connections.findIndex((connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === dealerSeat);
 const dealerTile = gameStartedMessages[dealerIndex]?.snapshot.game?.selfHand?.[0];
-const discardWaits = connections.map((connection) => next(connection.socket, "snapshot", (message) => message.snapshot.game?.stage === "awaiting_reactions"));
+const discardWaits = connections.map((connection) =>
+  next(connection.socket, "snapshot", (message) => message.snapshot.game?.discards.length === 1),
+);
 connections[dealerIndex]?.socket.send(JSON.stringify({ type: "discard_tile", tile: dealerTile }));
 const discardedMessages = await Promise.all(discardWaits);
 const dealerAfterDiscard = discardedMessages[dealerIndex];
-const originalPlayingHand = discardedMessages[1].snapshot.game?.selfHand;
+const nextSeat = (dealerSeat + 1) % 4;
+const nextPlayerIndex = connections.findIndex(
+  (connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === nextSeat,
+);
+const nextPlayerAfterDraw = discardedMessages[nextPlayerIndex];
+const nextTile = nextPlayerAfterDraw.snapshot.game?.selfHand?.[0];
+const secondDiscardWaits = connections.map((connection) =>
+  next(connection.socket, "snapshot", (message) => message.snapshot.game?.discards.length === 2),
+);
+connections[nextPlayerIndex]?.socket.send(JSON.stringify({ type: "discard_tile", tile: nextTile }));
+const secondDiscardMessages = await Promise.all(secondDiscardWaits);
+const originalPlayingHand = secondDiscardMessages[1].snapshot.game?.selfHand;
 
 const playingOfflineWait = next(first, "snapshot", (message) => message.snapshot.players.find((player) => player.id === joined.playerId)?.connected === false);
 restoredSocket.close();
@@ -90,6 +104,11 @@ const playingRestoredSocket = await open();
 const playingRestoredWait = next(playingRestoredSocket, "session");
 playingRestoredSocket.send(JSON.stringify({ type: "reconnect", roomCode: created.roomCode, playerToken: joined.playerToken }));
 const playingRestored = await playingRestoredWait;
+const [tileAssetResponse, tableAssetResponse] = await Promise.all([
+  fetch(`${httpBaseUrl}/assets/babykylin/MJ/bottom/Z_bottom.png`),
+  fetch(`${httpBaseUrl}/assets/babykylin/table/mahjong_table.jpg`),
+]);
+const [tileAsset, tableAsset] = await Promise.all([tileAssetResponse.arrayBuffer(), tableAssetResponse.arrayBuffer()]);
 
 const result = {
   serverUrl,
@@ -106,7 +125,14 @@ const result = {
   discardStage: dealerAfterDiscard.snapshot.game?.stage,
   discardedTile: dealerAfterDiscard.snapshot.game?.latestDiscard?.tile,
   dealerHandAfterDiscard: dealerAfterDiscard.snapshot.game?.selfHand?.length,
+  nextTurnSeat: dealerAfterDiscard.snapshot.game?.turnSeat,
+  nextPlayerHandAfterDraw: nextPlayerAfterDraw.snapshot.game?.selfHand?.length,
+  wallAfterFirstDiscard: dealerAfterDiscard.snapshot.game?.wallRemaining,
+  discardCountAfterSecondTurn: secondDiscardMessages[0].snapshot.game?.discards.length,
+  wallAfterSecondDiscard: secondDiscardMessages[0].snapshot.game?.wallRemaining,
   playingHandRestored: JSON.stringify(playingRestored.snapshot.game?.selfHand) === JSON.stringify(originalPlayingHand),
+  tileAsset: { contentType: tileAssetResponse.headers.get("content-type"), bytes: tileAsset.byteLength },
+  tableAsset: { contentType: tableAssetResponse.headers.get("content-type"), bytes: tableAsset.byteLength },
 };
 console.log(JSON.stringify(result));
 first.close();
@@ -125,10 +151,19 @@ if (
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
   ![13, 14].includes(result.hostPrivateHandCount) ||
   ![13, 14].includes(result.secondPrivateHandCount) ||
-  result.discardStage !== "awaiting_reactions" ||
+  result.discardStage !== "awaiting_discard" ||
   result.discardedTile !== dealerTile ||
   result.dealerHandAfterDiscard !== 13 ||
-  !result.playingHandRestored
+  result.nextTurnSeat !== nextSeat ||
+  result.nextPlayerHandAfterDraw !== 14 ||
+  result.wallAfterFirstDiscard !== 82 ||
+  result.discardCountAfterSecondTurn !== 2 ||
+  result.wallAfterSecondDiscard !== 81 ||
+  !result.playingHandRestored ||
+  result.tileAsset.contentType !== "image/png" ||
+  result.tileAsset.bytes < 100_000 ||
+  result.tableAsset.contentType !== "image/jpeg" ||
+  result.tableAsset.bytes < 100_000
 ) {
   process.exitCode = 1;
 }

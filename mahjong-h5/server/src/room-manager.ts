@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto";
 import type { RoomSnapshot, TileCode } from "../../shared/protocol.js";
-import { createInitialGame, sortTiles, type InitialGameState } from "./game-model.js";
+import { createInitialGame, drawTileFromWall, sortTiles, type InitialGameState } from "./game-model.js";
 
 type Player = {
   id: string;
@@ -26,6 +26,18 @@ export type Session = {
   playerId: string;
   playerToken: string;
   snapshot: RoomSnapshot;
+};
+
+export type TurnProgress = {
+  snapshot: RoomSnapshot;
+  diagnostics: {
+    initialDiscard: { seat: number; tile: TileCode; handTileCount: number };
+    autoDiscards: Array<{ seat: number; tile: TileCode; wallRemaining: number }>;
+    nextTurnSeat?: number;
+    wallRemaining: number;
+    nextHandTileCount?: number;
+    stage: NonNullable<RoomSnapshot["game"]>["stage"];
+  };
 };
 
 export class RoomError extends Error {
@@ -143,7 +155,7 @@ export class RoomManager {
     return this.snapshot(room.code);
   }
 
-  discardTile(rawCode: string, playerToken: string, tileCode: TileCode): RoomSnapshot {
+  discardTile(rawCode: string, playerToken: string, tileCode: TileCode): TurnProgress {
     const room = this.getRoom(rawCode);
     const player = room.players.find((candidate) => candidate.token === playerToken);
     if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
@@ -155,10 +167,43 @@ export class RoomManager {
     if (!hand || tileIndex < 0) throw new RoomError("TILE_NOT_IN_HAND", "你的手牌中没有这张牌");
 
     hand.splice(tileIndex, 1);
+    const initialHandTileCount = hand.length;
     room.game.discards.push({ seat: player.seat, tile: tileCode });
     room.game.stage = "awaiting_reactions";
+    room.game.lastDraw = undefined;
+    const autoDiscards: Array<{ seat: number; tile: TileCode; wallRemaining: number }> = [];
+    let nextSeat = (player.seat + 1) % 4;
+
+    while (true) {
+      const drawnTile = drawTileFromWall(room.game, nextSeat);
+      if (!drawnTile) break;
+      const nextPlayer = room.players.find((candidate) => candidate.seat === nextSeat);
+      if (!nextPlayer) throw new Error("下一回合玩家不存在");
+      if (!nextPlayer.isTestPlayer) break;
+
+      const testHand = room.game.hands.get(nextSeat);
+      const automaticTile = testHand?.pop();
+      if (!automaticTile) throw new Error("测试玩家没有可出的手牌");
+      room.game.discards.push({ seat: nextSeat, tile: automaticTile.code });
+      room.game.stage = "awaiting_reactions";
+      room.game.lastDraw = undefined;
+      autoDiscards.push({ seat: nextSeat, tile: automaticTile.code, wallRemaining: room.game.wall.length });
+      nextSeat = (nextSeat + 1) % 4;
+    }
+
     room.revision += 1;
-    return this.snapshot(room.code);
+    const nextTurnSeat = room.game.lastDraw ? room.game.turnSeat : undefined;
+    return {
+      snapshot: this.snapshot(room.code),
+      diagnostics: {
+        initialDiscard: { seat: player.seat, tile: tileCode, handTileCount: initialHandTileCount },
+        autoDiscards,
+        nextTurnSeat,
+        wallRemaining: room.game.wall.length,
+        nextHandTileCount: nextTurnSeat === undefined ? undefined : room.game.hands.get(nextTurnSeat)?.length,
+        stage: room.game.stage,
+      },
+    };
   }
 
   snapshot(rawCode: string): RoomSnapshot {
@@ -200,7 +245,9 @@ export class RoomManager {
             handTileCounts: [0, 1, 2, 3].map((seat) => room.game?.hands.get(seat)?.length ?? 0),
             viewerSeat: viewer?.seat,
             selfHand: viewer ? sortTiles(room.game.hands.get(viewer.seat) ?? []).map((tile) => tile.code) : undefined,
+            selfDrawnTile: viewer && room.game.lastDraw?.seat === viewer.seat ? room.game.lastDraw.tile.code : undefined,
             latestDiscard: room.game.discards.at(-1),
+            discards: [...room.game.discards],
           }
         : undefined,
     };

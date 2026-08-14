@@ -118,12 +118,52 @@ test("只有庄家可以从自己的手牌中执行首次出牌", () => {
     (error) => error instanceof RoomError && error.code === "TILE_NOT_IN_HAND",
   );
   const discarded = rooms.discardTile(dealer.roomCode, dealer.playerToken, tile);
-  assert.equal(discarded.game?.stage, "awaiting_reactions");
-  assert.deepEqual(discarded.game?.latestDiscard, { seat: dealerSeat, tile });
-  assert.equal(discarded.game?.handTileCounts[dealerSeat], 13);
-  assert.equal(discarded.game?.selfHand, undefined);
+  const nextSeat = (dealerSeat + 1) % 4;
+  assert.equal(discarded.snapshot.game?.stage, "awaiting_discard");
+  assert.deepEqual(discarded.snapshot.game?.latestDiscard, { seat: dealerSeat, tile });
+  assert.equal(discarded.snapshot.game?.handTileCounts[dealerSeat], 13);
+  assert.equal(discarded.snapshot.game?.handTileCounts[nextSeat], 14);
+  assert.equal(discarded.snapshot.game?.wallRemaining, 82);
+  assert.equal(discarded.snapshot.game?.selfHand, undefined);
+  assert.equal(discarded.diagnostics.nextTurnSeat, nextSeat);
   assert.throws(
     () => rooms.discardTile(dealer.roomCode, dealer.playerToken, tile),
-    (error) => error instanceof RoomError && error.code === "REACTIONS_PENDING",
+    (error) => error instanceof RoomError && error.code === "TURN_REQUIRED",
   );
+
+  const nextPlayer = sessions.find(
+    (session) => session.snapshot.players.find((player) => player.id === session.playerId)?.seat === nextSeat,
+  )!;
+  const nextView = rooms.snapshotForPlayer(nextPlayer.roomCode, nextPlayer.playerToken);
+  const nextTile = nextView.game!.selfHand![0]!;
+  const secondDiscard = rooms.discardTile(nextPlayer.roomCode, nextPlayer.playerToken, nextTile);
+  assert.equal(secondDiscard.snapshot.game?.discards.length, 2);
+  assert.equal(secondDiscard.snapshot.game?.turnSeat, (nextSeat + 1) % 4);
+  assert.equal(secondDiscard.snapshot.game?.wallRemaining, 81);
+});
+
+test("单人联调时测试玩家自动完成回合并把出牌权还给真人", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("单人联调");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+  rooms.setReady(host.roomCode, host.playerToken, true);
+  rooms.startGame(host.roomCode, host.playerToken);
+  const hostView = rooms.snapshotForPlayer(host.roomCode, host.playerToken);
+  const tile = hostView.game!.selfHand![0]!;
+
+  const progressed = rooms.discardTile(host.roomCode, host.playerToken, tile);
+
+  assert.equal(progressed.diagnostics.autoDiscards.length, 3);
+  assert.equal(progressed.diagnostics.initialDiscard.handTileCount, 13);
+  assert.deepEqual(
+    progressed.diagnostics.autoDiscards.map((discard) => discard.wallRemaining),
+    [82, 81, 80],
+  );
+  assert.equal(progressed.diagnostics.nextTurnSeat, 0);
+  assert.equal(progressed.snapshot.game?.stage, "awaiting_discard");
+  assert.equal(progressed.snapshot.game?.turnSeat, 0);
+  assert.equal(progressed.snapshot.game?.wallRemaining, 79);
+  assert.deepEqual(progressed.snapshot.game?.handTileCounts, [14, 13, 13, 13]);
+  assert.equal(progressed.snapshot.game?.discards.length, 4);
+  assert.equal(rooms.snapshotForPlayer(host.roomCode, host.playerToken).game?.selfHand?.length, 14);
 });

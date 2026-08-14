@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createFullTileSet, createInitialGame, sortTiles, validateInitialGame } from "../src/game-model.js";
+import { createFullTileSet, createInitialGame, drawTileFromWall, sortTiles, validateInitialGame } from "../src/game-model.js";
 
 test("完整牌组包含34种牌且每种4张", () => {
   const tiles = createFullTileSet();
@@ -27,4 +27,29 @@ test("最小开局模型满足四人发牌和牌张守恒", () => {
   assert.deepEqual([0, 1, 2, 3].map((seat) => game.hands.get(seat)?.length), [13, 13, 14, 13]);
   assert.equal(game.wall.length, 83);
   assert.doesNotThrow(() => validateInitialGame(game));
+});
+
+test("无操作响应后为下一家摸一张并记录独立摸牌", () => {
+  const game = createInitialGame([0, 1, 2, 3], 0, () => 0);
+  game.hands.get(0)!.pop();
+  game.lastDraw = undefined;
+  game.stage = "awaiting_reactions";
+
+  const drawn = drawTileFromWall(game, 1);
+
+  assert.ok(drawn);
+  assert.equal(game.wall.length, 82);
+  assert.equal(game.hands.get(1)?.length, 14);
+  assert.equal(game.turnSeat, 1);
+  assert.equal(game.stage, "awaiting_discard");
+  assert.deepEqual(game.lastDraw, { seat: 1, tile: drawn });
+});
+
+test("牌墙耗尽时结束本局且不再产生摸牌", () => {
+  const game = createInitialGame([0, 1, 2, 3], 0, () => 0);
+  game.wall.length = 0;
+
+  assert.equal(drawTileFromWall(game, 1), undefined);
+  assert.equal(game.stage, "round_ended");
+  assert.equal(game.lastDraw, undefined);
 });

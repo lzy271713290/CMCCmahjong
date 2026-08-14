@@ -1,7 +1,7 @@
-import { createReadStream, existsSync } from "node:fs";
+import { createReadStream, existsSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
-import { extname, join, normalize } from "node:path";
+import { extname, isAbsolute, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.js";
@@ -13,19 +13,40 @@ const manager = new RoomManager();
 const socketsByToken = new Map<string, WebSocket>();
 const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string }>();
 const projectRoot = fileURLToPath(new URL("../../..", import.meta.url));
+const publicAssetsRoot = join(projectRoot, "client/public/assets");
 
 const mimeTypes: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".css": "text/css; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".png": "image/png",
   ".svg": "image/svg+xml",
 };
 
 const server = createServer((request, response) => {
-  const requestedPath = request.url === "/app.js" ? "dist/client/src/app.js" : request.url === "/styles.css" ? "client/public/styles.css" : "client/public/index.html";
-  const safePath = normalize(requestedPath).replace(/^(\.\.[/\\])+/, "");
-  const filePath = join(projectRoot, safePath);
-  if (!existsSync(filePath)) {
+  const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+  let filePath: string | undefined;
+  if (pathname === "/app.js") filePath = join(projectRoot, "dist/client/src/app.js");
+  else if (pathname === "/styles.css") filePath = join(projectRoot, "client/public/styles.css");
+  else if (pathname === "/" || pathname === "/index.html") filePath = join(projectRoot, "client/public/index.html");
+  else if (pathname.startsWith("/assets/")) {
+    try {
+      const assetRelativePath = normalize(decodeURIComponent(pathname.slice("/assets/".length))).replace(/^[/\\]+/, "");
+      const assetPath = join(publicAssetsRoot, assetRelativePath);
+      const pathFromAssets = relative(publicAssetsRoot, assetPath);
+      if (!pathFromAssets.startsWith("..") && !isAbsolute(pathFromAssets)) filePath = assetPath;
+    } catch {
+      response.writeHead(400).end("Bad asset path");
+      return;
+    }
+  }
+  if (!filePath) {
+    response.writeHead(404).end("Not found");
+    return;
+  }
+  if (!existsSync(filePath) || !statSync(filePath).isFile()) {
     response.writeHead(404).end("Not found");
     return;
   }
@@ -152,16 +173,45 @@ webSockets.on("connection", (socket) => {
         }
         case "discard_tile": {
           const session = requireSession(socket);
-          const snapshot = manager.discardTile(session.roomCode, session.playerToken, message.tile);
+          const result = manager.discardTile(session.roomCode, session.playerToken, message.tile);
+          const { snapshot, diagnostics } = result;
           broadcast(session.roomCode);
           logInfo("tile_discarded", {
             connectionId,
             roomCode: session.roomCode,
-            seat: snapshot.game?.latestDiscard?.seat,
-            tile: snapshot.game?.latestDiscard?.tile,
-            handTileCount: snapshot.game?.latestDiscard ? snapshot.game.handTileCounts[snapshot.game.latestDiscard.seat] : undefined,
-            wallRemaining: snapshot.game?.wallRemaining,
-            nextStage: snapshot.game?.stage,
+            seat: diagnostics.initialDiscard.seat,
+            tile: diagnostics.initialDiscard.tile,
+            handTileCount: diagnostics.initialDiscard.handTileCount,
+            wallRemaining: diagnostics.wallRemaining,
+            nextStage: diagnostics.stage,
+            revision: snapshot.revision,
+          });
+          logInfo("reaction_window_resolved", {
+            connectionId,
+            roomCode: session.roomCode,
+            discardSeat: diagnostics.initialDiscard.seat,
+            eligibleOperationCount: 0,
+            resolution: "advance_turn",
+            revision: snapshot.revision,
+          });
+          for (const automatic of diagnostics.autoDiscards) {
+            logInfo("test_player_auto_discarded", {
+              connectionId,
+              roomCode: session.roomCode,
+              seat: automatic.seat,
+              tile: automatic.tile,
+              wallRemaining: automatic.wallRemaining,
+              revision: snapshot.revision,
+            });
+          }
+          logInfo("turn_advanced", {
+            connectionId,
+            roomCode: session.roomCode,
+            nextTurnSeat: diagnostics.nextTurnSeat,
+            nextHandTileCount: diagnostics.nextHandTileCount,
+            wallRemaining: diagnostics.wallRemaining,
+            automaticTurnCount: diagnostics.autoDiscards.length,
+            stage: diagnostics.stage,
             revision: snapshot.revision,
           });
           break;

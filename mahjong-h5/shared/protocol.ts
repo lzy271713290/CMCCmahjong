@@ -23,12 +23,14 @@ export type RoomSnapshot = {
     roundNumber: number;
     dealerSeat: number;
     turnSeat: number;
-    stage: "awaiting_discard" | "awaiting_reactions";
+    stage: "awaiting_discard" | "awaiting_reactions" | "round_ended";
     wallRemaining: number;
     handTileCounts: number[];
     viewerSeat?: number;
     selfHand?: TileCode[];
+    selfDrawnTile?: TileCode;
     latestDiscard?: DiscardView;
+    discards: DiscardView[];
   };
 };
 
