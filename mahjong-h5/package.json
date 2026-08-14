@@ -1,0 +1,20 @@
+{
+  "name": "friends-mahjong-h5",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/server/src/index.js",
+    "test": "pnpm run build && node --test dist/server/test/*.test.js",
+    "smoke": "node scripts/websocket-smoke.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.9.3"
+  }
+}

@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#123f32" />
+    <title>好友麻将</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header>
+        <div><span class="eyebrow">手机在线</span><h1>好友麻将</h1></div>
+        <span id="connection" class="status">连接中</span>
+      </header>
+      <section id="lobby" class="card">
+        <h2>一起开一桌</h2>
+        <p class="muted">输入昵称后开房，朋友用六位房间号加入。</p>
+        <label>你的昵称<input id="name" maxlength="12" autocomplete="nickname" placeholder="例如：老张" /></label>
+        <button id="create" class="primary">创建房间</button>
+        <div class="divider"><span>或加入朋友的房间</span></div>
+        <label>六位房间号<input id="room-code" inputmode="numeric" maxlength="6" placeholder="000000" /></label>
+        <button id="join">加入房间</button>
+      </section>
+      <section id="room" class="card hidden">
+        <div class="room-title"><div><span class="muted">房间号</span><strong id="current-code">------</strong></div><button id="copy" class="compact">复制房间号</button></div>
+        <div id="seats" class="seats"></div>
+        <button id="ready" class="primary">准备</button>
+        <button id="fill-test" class="test-button">一键补齐测试玩家</button>
+        <button id="start" class="primary hidden">开始游戏</button>
+        <div id="game-status" class="game-status hidden"><strong>第一局已开始</strong><span>牌桌、发牌和出牌功能正在下一阶段接入。</span></div>
+        <p class="hint">这是第一步联机样板：已支持开房、加入、状态同步和掉线恢复；麻将牌桌随后接入。</p>
+      </section>
+      <p id="notice" class="notice" aria-live="polite"></p>
+    </main>
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
