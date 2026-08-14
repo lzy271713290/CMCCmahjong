@@ -42,6 +42,15 @@ export type WinnerScoreView = {
   isPengPengHu: boolean;
   isSanBuLao: boolean;
 };
+export type MatchMode = 8 | 16;
+export type MatchRankingView = { seat: number; score: number; rank: number };
+export type MatchView = {
+  totalRounds: MatchMode;
+  completedRounds: number;
+  status: "waiting" | "active" | "completed";
+  endReason?: "round_limit" | "negative_score";
+  rankings?: MatchRankingView[];
+};
 export type RoundResultView = {
   reason: "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted";
   winnerSeats: number[];
@@ -68,6 +77,7 @@ export type RoomSnapshot = {
   phase: "waiting" | "playing";
   players: PlayerView[];
   scoreTotals: number[];
+  match: MatchView;
   game?: {
     modelVersion: string;
     roundNumber: number;
@@ -97,7 +107,7 @@ export type RoomSnapshot = {
 };
 
 export type ClientMessage =
-  | { type: "create_room"; name: string }
+  | { type: "create_room"; name: string; totalRounds?: MatchMode }
   | { type: "join_room"; roomCode: string; name: string }
   | { type: "reconnect"; roomCode: string; playerToken: string }
   | { type: "set_ready"; ready: boolean }

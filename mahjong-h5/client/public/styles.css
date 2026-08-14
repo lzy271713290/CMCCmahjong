@@ -8,7 +8,7 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; }
 body { min-height: 100svh; background: radial-gradient(circle at 50% -10%, #28735c 0, #0e3b2e 42%, #071e18 100%); }
-button, input { font: inherit; }
+button, input, select { font: inherit; }
 .hidden { display: none !important; }
 
 .shell { width: min(100%, 520px); margin: 0 auto; padding: max(24px, env(safe-area-inset-top)) 18px max(28px, env(safe-area-inset-bottom)); }
@@ -24,6 +24,8 @@ h2 { margin: 0 0 8px; font-size: 23px; }
 label { display: grid; gap: 8px; margin: 16px 0; color: #dbe7e2; font-size: 14px; }
 input { width: 100%; padding: 14px 15px; border: 1px solid #356858; border-radius: 12px; outline: none; background: #092a21; color: white; font-size: 16px; }
 input:focus { border-color: #d7b968; box-shadow: 0 0 0 3px rgba(215,185,104,.13); }
+select { width: 100%; padding: 14px 15px; border: 1px solid #356858; border-radius: 12px; outline: none; background: #092a21; color: white; font-size: 16px; }
+select:focus { border-color: #d7b968; box-shadow: 0 0 0 3px rgba(215,185,104,.13); }
 button { width: 100%; padding: 14px; border: 1px solid #477667; border-radius: 12px; background: #164c3c; color: white; cursor: pointer; }
 button:disabled { cursor: wait; }
 button.primary { border-color: #d7b968; background: #d7b968; color: #15382d; font-weight: 750; }
@@ -62,6 +64,7 @@ body.in-game .shell { display: none; }
 .table-hud { position: absolute; z-index: 30; top: max(10px, env(safe-area-inset-top)); left: max(12px, env(safe-area-inset-left)); right: max(12px, env(safe-area-inset-right)); display: flex; align-items: center; justify-content: space-between; pointer-events: none; }
 .hud-room { display: flex; align-items: baseline; gap: 8px; padding: 7px 12px; border: 1px solid rgba(242,213,127,.4); border-radius: 9px; background: rgba(3,30,27,.74); box-shadow: 0 4px 12px rgba(0,0,0,.25); }
 .hud-room span { color: #9fc7b8; font-size: 11px; }
+.hud-room #game-match-progress { color: #f2d98f; font-weight: 800; white-space: nowrap; }
 .hud-room strong { color: #f5d478; font-size: 17px; letter-spacing: .14em; }
 .round-label { padding: 7px 16px; border-radius: 999px; background: rgba(2,41,37,.72); color: #d9eee6; font-size: 12px; }
 
@@ -133,6 +136,7 @@ body.in-game .shell { display: none; }
 .score-summary strong { font-size: 16px; }
 .score-summary span { font-size: 12px; font-weight: 800; }
 .score-summary small { max-height: 32px; overflow: auto; color: #cce7df; font-size: 10px; line-height: 1.35; }
+.score-summary em { color: #ffe18a; font-size: 11px; font-style: normal; font-weight: 800; }
 .score-summary .next-round-button { width: auto; min-height: 30px; margin: 2px auto 0; padding: 5px 18px; border-color: #ffd66f; background: linear-gradient(180deg, #ffe88c, #d99a22); color: #4b2600; font-weight: 800; }
 
 .self-area { position: absolute; z-index: 25; right: 3.5%; bottom: max(1.8%, env(safe-area-inset-bottom)); left: 15%; display: flex; justify-content: center; }

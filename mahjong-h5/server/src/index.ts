@@ -82,6 +82,8 @@ function bindSession(socket: WebSocket, session: Session, connectionId: string, 
     playerCount: session.snapshot.players.length,
     revision: session.snapshot.revision,
     phase: session.snapshot.phase,
+    totalRounds: session.snapshot.match.totalRounds,
+    completedRounds: session.snapshot.match.completedRounds,
   });
   if (event === "room_reconnected" && session.snapshot.game?.selfHand) {
     logInfo("private_hand_restored", {
@@ -101,6 +103,20 @@ function requireSession(socket: WebSocket): { roomCode: string; playerToken: str
   return session;
 }
 
+function logMatchEndedIfNeeded(snapshot: Session["snapshot"], connectionId: string, roomCode: string): void {
+  if (snapshot.match.status !== "completed") return;
+  logInfo("match_ended", {
+    connectionId,
+    roomCode,
+    endReason: snapshot.match.endReason,
+    completedRounds: snapshot.match.completedRounds,
+    totalRounds: snapshot.match.totalRounds,
+    scoreTotals: snapshot.scoreTotals.join(","),
+    rankings: snapshot.match.rankings?.map((ranking) => `${ranking.rank}:${ranking.seat}:${ranking.score}`).join(","),
+    revision: snapshot.revision,
+  });
+}
+
 webSockets.on("connection", (socket) => {
   const connectionId = randomUUID().slice(0, 8);
   logInfo("websocket_connected", { connectionId });
@@ -114,7 +130,7 @@ webSockets.on("connection", (socket) => {
       requestedRoomCode = "roomCode" in message ? message.roomCode : undefined;
       switch (message.type) {
         case "create_room": {
-          const session = manager.createRoom(message.name);
+          const session = manager.createRoom(message.name, message.totalRounds);
           bindSession(socket, session, connectionId, "room_created");
           break;
         }
@@ -186,6 +202,8 @@ webSockets.on("connection", (socket) => {
             handTileCounts: snapshot.game?.handTileCounts.join(","),
             totalTiles: (snapshot.game?.wallRemaining ?? 0) + (snapshot.game?.handTileCounts.reduce((sum, count) => sum + count, 0) ?? 0),
             scoreTotals: snapshot.scoreTotals.join(","),
+            completedRounds: snapshot.match.completedRounds,
+            totalRounds: snapshot.match.totalRounds,
             privacyMode: "self_hand_only",
             revision: snapshot.revision,
           });
@@ -248,6 +266,7 @@ webSockets.on("connection", (socket) => {
             stage: diagnostics.stage,
             revision: snapshot.revision,
           });
+          logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
           break;
         }
         case "perform_turn_operation": {
@@ -312,6 +331,7 @@ webSockets.on("connection", (socket) => {
               revision: snapshot.revision,
             });
           }
+          logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
           break;
         }
         case "react_to_discard": {
@@ -403,6 +423,7 @@ webSockets.on("connection", (socket) => {
             stage: diagnostics.stage,
             revision: snapshot.revision,
           });
+          logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
           break;
         }
         case "ping":

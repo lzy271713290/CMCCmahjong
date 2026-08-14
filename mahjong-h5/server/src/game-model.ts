@@ -11,7 +11,7 @@ import type {
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "round-loop-v6";
+export const GAME_MODEL_VERSION = "match-mode-v7";
 
 export type Tile = {
   code: TileCode;

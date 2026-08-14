@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from "node:crypto";
-import type { DiscardView, MeldView, ReactionOption, RoomSnapshot, ScorePaymentView, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { DiscardView, MatchMode, MatchRankingView, MeldView, ReactionOption, RoomSnapshot, ScorePaymentView, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import {
   analyzeWinningHand,
   createInitialGame,
@@ -31,6 +31,9 @@ type Room = {
   hostPlayerId: string;
   players: Player[];
   scoreTotals: number[];
+  totalRounds: MatchMode;
+  completedRounds: number;
+  matchEndReason?: "round_limit" | "negative_score";
   game?: InitialGameState;
 };
 
@@ -124,8 +127,9 @@ export class RoomManager {
     private readonly gameFactory: typeof createInitialGame = createInitialGame,
   ) {}
 
-  createRoom(rawName: string): Session {
+  createRoom(rawName: string, totalRounds: MatchMode = 8): Session {
     const name = this.normalizeName(rawName);
+    if (totalRounds !== 8 && totalRounds !== 16) throw new RoomError("MATCH_MODE_INVALID", "房间局数只能选择8局或16局");
     const code = this.createCode();
     const player = this.createPlayer(name, 0);
     const room: Room = {
@@ -135,6 +139,8 @@ export class RoomManager {
       hostPlayerId: player.id,
       players: [player],
       scoreTotals: [200, 200, 200, 200],
+      totalRounds,
+      completedRounds: 0,
     };
     this.rooms.set(code, room);
     return this.toSession(room, player);
@@ -235,6 +241,7 @@ export class RoomManager {
     if (!operator) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
     if (operator.id !== room.hostPlayerId) throw new RoomError("HOST_REQUIRED", "只有房主可以开始下一局");
     if (room.phase !== "playing" || !room.game) throw new RoomError("GAME_NOT_STARTED", "牌局尚未开始");
+    if (room.matchEndReason) throw new RoomError("MATCH_ENDED", "整场游戏已经结束");
     if (room.game.stage !== "round_ended" || !room.game.roundResult) throw new RoomError("ROUND_ACTIVE", "本局尚未结束");
 
     const previous = room.game;
@@ -275,7 +282,7 @@ export class RoomManager {
     room.game.lastDraw = undefined;
     const progress: AutomaticProgress = { autoDiscards: [], reactionWindows: [] };
     this.progressFromDiscard(room, { seat: player.seat, tile: tileCode }, progress);
-
+    this.updateMatchAfterRound(room);
     room.revision += 1;
     const nextTurnSeat = room.game.lastDraw ? room.game.turnSeat : undefined;
     return {
@@ -402,6 +409,7 @@ export class RoomManager {
 
     if (meld && option.kind !== "zimo") this.recordKongPayments(room, player.seat, option.kind);
 
+    this.updateMatchAfterRound(room);
     room.revision += 1;
     return {
       snapshot: this.snapshot(room.code),
@@ -505,6 +513,7 @@ export class RoomManager {
       }
     }
 
+    this.updateMatchAfterRound(room);
     room.revision += 1;
     const nextTurnSeat = game.pendingReaction || game.roundResult ? undefined : game.turnSeat;
     return {
@@ -554,6 +563,13 @@ export class RoomManager {
           isTestPlayer: player.isTestPlayer,
         })),
       scoreTotals: [...room.scoreTotals],
+      match: {
+        totalRounds: room.totalRounds,
+        completedRounds: room.completedRounds,
+        status: room.matchEndReason ? "completed" : room.phase === "playing" ? "active" : "waiting",
+        endReason: room.matchEndReason,
+        rankings: room.matchEndReason ? this.calculateRankings(room.scoreTotals) : undefined,
+      },
       game: room.game
         ? {
             modelVersion: room.game.modelVersion,
@@ -802,6 +818,20 @@ export class RoomManager {
       game.scoreDeltas[seat] = (game.scoreDeltas[seat] ?? 0) + (deltas[seat] ?? 0);
       room.scoreTotals[seat] = (room.scoreTotals[seat] ?? 200) + (deltas[seat] ?? 0);
     }
+  }
+
+  private updateMatchAfterRound(room: Room): void {
+    const game = room.game;
+    if (!game || game.stage !== "round_ended" || room.completedRounds >= game.roundNumber) return;
+    room.completedRounds = game.roundNumber;
+    if (room.scoreTotals.some((score) => score < 0)) room.matchEndReason = "negative_score";
+    else if (room.completedRounds >= room.totalRounds) room.matchEndReason = "round_limit";
+  }
+
+  private calculateRankings(scoreTotals: readonly number[]): MatchRankingView[] {
+    return scoreTotals
+      .map((score, seat) => ({ seat, score, rank: 1 + scoreTotals.filter((candidate) => candidate > score).length }))
+      .sort((left, right) => left.rank - right.rank || left.seat - right.seat);
   }
 
   private getRoom(rawCode: string): Room {

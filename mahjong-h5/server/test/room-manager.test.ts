@@ -72,6 +72,18 @@ test("四人全部准备后房主可以开始游戏", () => {
   assert.equal(snapshot.game?.dealerSeat, 0);
 });
 
+test("创建房间可以选择8局或16局模式", () => {
+  const rooms = new RoomManager();
+  const eight = rooms.createRoom("八局房", 8);
+  const sixteen = rooms.createRoom("十六局房", 16);
+  assert.deepEqual(eight.snapshot.match, { totalRounds: 8, completedRounds: 0, status: "waiting", endReason: undefined, rankings: undefined });
+  assert.equal(sixteen.snapshot.match.totalRounds, 16);
+  assert.throws(
+    () => rooms.createRoom("错误房", 12 as 8),
+    (error) => error instanceof RoomError && error.code === "MATCH_MODE_INVALID",
+  );
+});
+
 test("有人未准备时不能开始游戏", () => {
   const rooms = new RoomManager();
   const host = rooms.createRoom("房主");
@@ -465,6 +477,89 @@ test("闲家胡牌后由原庄下家坐庄", () => {
   assert.equal(next.game?.turnSeat, 1);
   assert.deepEqual(next.scoreTotals, [168, 248, 192, 192]);
   assert.deepEqual(next.game?.handTileCounts, [13, 14, 13, 13]);
+});
+
+function createImmediateWallExhaustedGame(
+  seats: readonly number[],
+  dealerSeat: number,
+  roundNumber = 1,
+): InitialGameState {
+  const dealerTile: Tile = { code: "wan-1", copy: 0 };
+  return {
+    modelVersion: GAME_MODEL_VERSION,
+    roundNumber,
+    dealerSeat,
+    turnSeat: dealerSeat,
+    stage: "awaiting_discard",
+    hands: new Map(seats.map((seat) => [seat, seat === dealerSeat ? [dealerTile] : []])),
+    wall: [],
+    discards: [],
+    melds: new Map(seats.map((seat) => [seat, []])),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
+    lastDraw: { seat: dealerSeat, tile: dealerTile },
+  };
+}
+
+test("8局模式完成第8局后按累计分并列排名", () => {
+  const rooms = new RoomManager(
+    () => 0,
+    (seats, dealerSeat, _randomIndex, roundNumber) => createImmediateWallExhaustedGame(seats, dealerSeat, roundNumber),
+  );
+  const sessions = [rooms.createRoom("东", 8)];
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  let snapshot = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
+
+  for (let round = 1; round <= 8; round += 1) {
+    const dealerSession = sessions.find(
+      (session) => session.snapshot.players.find((player) => player.id === session.playerId)?.seat === snapshot.game?.dealerSeat,
+    )!;
+    snapshot = rooms.discardTile(snapshot.roomCode, dealerSession.playerToken, "wan-1").snapshot;
+    assert.equal(snapshot.match.completedRounds, round);
+    if (round < 8) snapshot = rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken);
+  }
+
+  assert.equal(snapshot.match.status, "completed");
+  assert.equal(snapshot.match.endReason, "round_limit");
+  assert.deepEqual(snapshot.match.rankings, [
+    { seat: 0, score: 200, rank: 1 },
+    { seat: 1, score: 200, rank: 1 },
+    { seat: 2, score: 200, rank: 1 },
+    { seat: 3, score: 200, rank: 1 },
+  ]);
+  assert.throws(
+    () => rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken),
+    (error) => error instanceof RoomError && error.code === "MATCH_ENDED",
+  );
+});
+
+test("16局模式在局末出现负分时提前结束并生成并列排名", () => {
+  const rooms = new RoomManager(() => 0, () => createSelfDrawGame());
+  const sessions = [rooms.createRoom("东", 16)];
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  let snapshot = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
+
+  for (let round = 1; round <= 7; round += 1) {
+    snapshot = rooms.performTurnOperation(snapshot.roomCode, sessions[0]!.playerToken, "zimo").snapshot;
+    if (round < 7) snapshot = rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken);
+  }
+
+  assert.equal(snapshot.match.status, "completed");
+  assert.equal(snapshot.match.completedRounds, 7);
+  assert.equal(snapshot.match.endReason, "negative_score");
+  assert.deepEqual(snapshot.scoreTotals, [872, -24, -24, -24]);
+  assert.deepEqual(snapshot.match.rankings, [
+    { seat: 0, score: 872, rank: 1 },
+    { seat: 1, score: -24, rank: 2 },
+    { seat: 2, score: -24, rank: 2 },
+    { seat: 3, score: -24, rank: 2 },
+  ]);
 });
 
 function createConcealedGangGame(): InitialGameState {

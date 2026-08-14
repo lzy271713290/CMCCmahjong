@@ -26,7 +26,7 @@ function next(socket, type, predicate = () => true) {
 
 const first = await open();
 const createdWait = next(first, "session");
-first.send(JSON.stringify({ type: "create_room", name: "甲" }));
+first.send(JSON.stringify({ type: "create_room", name: "甲", totalRounds: 16 }));
 const created = await createdWait;
 
 const second = await open();
@@ -162,6 +162,7 @@ const result = {
   originalSeatRestored: restored.playerId === joined.playerId,
   gamePhase: gameStarted.snapshot.phase,
   modelVersion: gameStarted.snapshot.game?.modelVersion,
+  matchRounds: gameStarted.snapshot.match?.totalRounds,
   earlyNextRoundRejected: earlyNextRoundError.code === "ROUND_ACTIVE",
   wallRemaining: gameStarted.snapshot.game?.wallRemaining,
   handTileCounts: gameStarted.snapshot.game?.handTileCounts,
@@ -192,7 +193,8 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "round-loop-v6" ||
+  result.modelVersion !== "match-mode-v7" ||
+  result.matchRounds !== 16 ||
   !result.earlyNextRoundRejected ||
   result.wallRemaining !== 83 ||
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||

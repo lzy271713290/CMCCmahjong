@@ -9,6 +9,7 @@ const lobby = required<HTMLElement>("lobby");
 const room = required<HTMLElement>("room");
 const gameScreen = required<HTMLElement>("game-screen");
 const nameInput = required<HTMLInputElement>("name");
+const matchRounds = required<HTMLSelectElement>("match-rounds");
 const codeInput = required<HTMLInputElement>("room-code");
 const createButton = required<HTMLButtonElement>("create");
 const joinButton = required<HTMLButtonElement>("join");
@@ -17,7 +18,9 @@ const fillTestButton = required<HTMLButtonElement>("fill-test");
 const startButton = required<HTMLButtonElement>("start");
 const copyButton = required<HTMLButtonElement>("copy");
 const currentCode = required<HTMLElement>("current-code");
+const matchModeLabel = required<HTMLElement>("match-mode-label");
 const gameRoomCode = required<HTMLElement>("game-room-code");
+const gameMatchProgress = required<HTMLElement>("game-match-progress");
 const roundLabel = required<HTMLElement>("round-label");
 const seats = required<HTMLElement>("seats");
 const tableSeats = required<HTMLElement>("table-seats");
@@ -95,7 +98,9 @@ function render(next: RoomSnapshot): void {
   room.classList.toggle("hidden", isPlaying);
   gameScreen.classList.toggle("hidden", !isPlaying);
   currentCode.textContent = next.roomCode;
+  matchModeLabel.textContent = `${next.match.totalRounds}局`;
   gameRoomCode.textContent = next.roomCode;
+  gameMatchProgress.textContent = `第${next.game?.roundNumber ?? 1}/${next.match.totalRounds}局`;
 
   if (isPlaying && next.game) {
     renderTable(next, me);
@@ -127,7 +132,7 @@ function renderWaitingRoom(next: RoomSnapshot, me: PlayerView | undefined): void
 function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   const game = next.game!;
   const viewerSeat = game.viewerSeat ?? me?.seat ?? 0;
-  roundLabel.textContent = `第${game.roundNumber}局 · ${winds[(viewerSeat - game.dealerSeat + 4) % 4]}位视角`;
+  roundLabel.textContent = `第${game.roundNumber}/${next.match.totalRounds}局 · ${winds[(viewerSeat - game.dealerSeat + 4) % 4]}位视角`;
   wallStatus.textContent = String(game.wallRemaining);
   renderPlayers(next, viewerSeat);
   renderWalls(game.wallRemaining);
@@ -137,7 +142,9 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   renderScoreSummary(next);
 
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
-  if (game.stage === "round_ended") {
+  if (next.match.status === "completed") {
+    turnStatus.textContent = `整场结束 · 已完成${next.match.completedRounds}局`;
+  } else if (game.stage === "round_ended") {
     if (game.roundResult?.reason === "discard_hu" || game.roundResult?.reason === "rob_kong_hu" || game.roundResult?.reason === "self_draw_hu") {
       const winners = game.roundResult.winnerSeats
         .map((seat) => next.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`)
@@ -293,7 +300,7 @@ function renderScoreSummary(next: RoomSnapshot): void {
   if (!game || game.stage !== "round_ended" || !result) return;
 
   const title = document.createElement("strong");
-  title.textContent = result.winnerSeats.length > 0 ? "本局结算" : "本局流局";
+  title.textContent = next.match.status === "completed" ? "整场结算" : result.winnerSeats.length > 0 ? "本局结算" : "本局流局";
   const deltas = document.createElement("span");
   deltas.textContent = next.players
     .map((player) => `${player.name} ${(game.scoreDeltas[player.seat] ?? 0) >= 0 ? "+" : ""}${game.scoreDeltas[player.seat] ?? 0}`)
@@ -312,8 +319,16 @@ function renderScoreSummary(next: RoomSnapshot): void {
     scoreSummary.append(detail);
   }
 
+  if (next.match.rankings?.length) {
+    const rankings = document.createElement("em");
+    rankings.textContent = next.match.rankings
+      .map((ranking) => `第${ranking.rank}名 ${next.players.find((player) => player.seat === ranking.seat)?.name ?? `${ranking.seat + 1}号位`} ${ranking.score}分`)
+      .join(" · ");
+    scoreSummary.append(rankings);
+  }
+
   const me = next.players.find((player) => player.id === saved?.playerId);
-  if (me?.isHost) {
+  if (me?.isHost && next.match.status !== "completed") {
     const nextRound = document.createElement("button");
     nextRound.type = "button";
     nextRound.className = "next-round-button";
@@ -452,7 +467,7 @@ function showNotice(text: string): void {
   gameNotice.textContent = text;
 }
 
-createButton.addEventListener("click", () => send({ type: "create_room", name: nameInput.value }));
+createButton.addEventListener("click", () => send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16 }));
 joinButton.addEventListener("click", () => send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value }));
 readyButton.addEventListener("click", () => {
   const me = snapshot?.players.find((player) => player.id === saved?.playerId);
