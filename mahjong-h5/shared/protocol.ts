@@ -2,6 +2,25 @@ export type NumberedSuit = "wan" | "tong" | "tiao";
 export type HonorTile = "east" | "south" | "west" | "north" | "red" | "green" | "white";
 export type TileCode = `${NumberedSuit}-${number}` | HonorTile;
 export type DiscardView = { seat: number; tile: TileCode };
+export type ReactionKind = "chi" | "peng" | "gang" | "hu";
+export type ReactionOption = {
+  id: string;
+  kind: ReactionKind;
+  consumeTiles: TileCode[];
+  displayTiles: TileCode[];
+};
+export type MeldView = {
+  seat: number;
+  kind: "chi" | "peng" | "gang";
+  tiles: TileCode[];
+  fromSeat: number;
+};
+export type RoundResultView = {
+  reason: "discard_hu" | "wall_exhausted";
+  winnerSeats: number[];
+  fromSeat?: number;
+  tile?: TileCode;
+};
 
 export type PlayerView = {
   id: string;
@@ -31,6 +50,14 @@ export type RoomSnapshot = {
     selfDrawnTile?: TileCode;
     latestDiscard?: DiscardView;
     discards: DiscardView[];
+    melds: MeldView[];
+    reaction?: {
+      discard: DiscardView;
+      waitingCount: number;
+      respondedCount: number;
+    };
+    availableOperations?: ReactionOption[];
+    roundResult?: RoundResultView;
   };
 };
 
@@ -42,6 +69,7 @@ export type ClientMessage =
   | { type: "fill_test_players" }
   | { type: "start_game" }
   | { type: "discard_tile"; tile: TileCode }
+  | { type: "react_to_discard"; operationId: string | "pass" }
   | { type: "ping" };
 
 export type ServerMessage =

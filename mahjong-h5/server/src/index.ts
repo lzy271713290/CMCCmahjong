@@ -186,14 +186,28 @@ webSockets.on("connection", (socket) => {
             nextStage: diagnostics.stage,
             revision: snapshot.revision,
           });
-          logInfo("reaction_window_resolved", {
-            connectionId,
-            roomCode: session.roomCode,
-            discardSeat: diagnostics.initialDiscard.seat,
-            eligibleOperationCount: 0,
-            resolution: "advance_turn",
-            revision: snapshot.revision,
-          });
+          for (const window of diagnostics.reactionWindows) {
+            logInfo("reaction_options_calculated", {
+              connectionId,
+              roomCode: session.roomCode,
+              discardSeat: window.discard.seat,
+              eligibleSeatCount: window.eligibleSeats.length,
+              optionCount: window.optionCount,
+              autoPassedCount: window.autoPassedSeats.length,
+              awaitingResponseCount: window.awaitingSeats.length,
+              resolution: window.resolution,
+              revision: snapshot.revision,
+            });
+            if (window.resolution === "advance_turn") {
+              logInfo("reaction_window_resolved", {
+                connectionId,
+                roomCode: session.roomCode,
+                discardSeat: window.discard.seat,
+                resolution: "all_passed_or_no_options",
+                revision: snapshot.revision,
+              });
+            }
+          }
           for (const automatic of diagnostics.autoDiscards) {
             logInfo("test_player_auto_discarded", {
               connectionId,
@@ -209,6 +223,82 @@ webSockets.on("connection", (socket) => {
             roomCode: session.roomCode,
             nextTurnSeat: diagnostics.nextTurnSeat,
             nextHandTileCount: diagnostics.nextHandTileCount,
+            wallRemaining: diagnostics.wallRemaining,
+            automaticTurnCount: diagnostics.autoDiscards.length,
+            stage: diagnostics.stage,
+            revision: snapshot.revision,
+          });
+          break;
+        }
+        case "react_to_discard": {
+          const session = requireSession(socket);
+          const result = manager.reactToDiscard(session.roomCode, session.playerToken, message.operationId);
+          const { snapshot, diagnostics } = result;
+          broadcast(session.roomCode);
+          logInfo("reaction_response_received", {
+            connectionId,
+            roomCode: session.roomCode,
+            responderSeat: diagnostics.responderSeat,
+            operation: diagnostics.operationId === "pass" ? "pass" : diagnostics.operationId.split(":", 1)[0],
+            resolution: diagnostics.resolution,
+            revision: snapshot.revision,
+          });
+          if (diagnostics.resolution !== "waiting") {
+            logInfo("reaction_window_resolved", {
+              connectionId,
+              roomCode: session.roomCode,
+              resolution: diagnostics.resolution,
+              revision: snapshot.revision,
+            });
+          }
+          for (const window of diagnostics.reactionWindows) {
+            logInfo("reaction_options_calculated", {
+              connectionId,
+              roomCode: session.roomCode,
+              discardSeat: window.discard.seat,
+              eligibleSeatCount: window.eligibleSeats.length,
+              optionCount: window.optionCount,
+              autoPassedCount: window.autoPassedSeats.length,
+              awaitingResponseCount: window.awaitingSeats.length,
+              resolution: window.resolution,
+              revision: snapshot.revision,
+            });
+          }
+          for (const automatic of diagnostics.autoDiscards) {
+            logInfo("test_player_auto_discarded", {
+              connectionId,
+              roomCode: session.roomCode,
+              seat: automatic.seat,
+              tile: automatic.tile,
+              wallRemaining: automatic.wallRemaining,
+              revision: snapshot.revision,
+            });
+          }
+          if (diagnostics.claimedMeld) {
+            logInfo("meld_claimed", {
+              connectionId,
+              roomCode: session.roomCode,
+              seat: diagnostics.claimedMeld.seat,
+              meldKind: diagnostics.claimedMeld.kind,
+              fromSeat: diagnostics.claimedMeld.fromSeat,
+              wallRemaining: diagnostics.wallRemaining,
+              revision: snapshot.revision,
+            });
+          }
+          if (diagnostics.resolution === "discard_hu") {
+            logInfo("round_ended", {
+              connectionId,
+              roomCode: session.roomCode,
+              reason: "discard_hu",
+              winnerSeats: diagnostics.winningSeats.join(","),
+              winnerCount: diagnostics.winningSeats.length,
+              revision: snapshot.revision,
+            });
+          }
+          logInfo("turn_advanced", {
+            connectionId,
+            roomCode: session.roomCode,
+            nextTurnSeat: diagnostics.nextTurnSeat,
             wallRemaining: diagnostics.wallRemaining,
             automaticTurnCount: diagnostics.autoDiscards.length,
             stage: diagnostics.stage,

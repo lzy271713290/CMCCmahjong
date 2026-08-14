@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { findDiscardReactionOptions } from "../dist/server/src/game-model.js";
 
 const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
 const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
@@ -70,15 +71,50 @@ for (const connection of connections) {
   await readyWait;
 }
 
+function toTiles(codes) {
+  const copies = new Map();
+  return codes.map((code) => {
+    const copy = copies.get(code) ?? 0;
+    copies.set(code, copy + 1);
+    return { code, copy };
+  });
+}
+
+function chooseSafeDiscard(messages, discarderIndex) {
+  const discarder = messages[discarderIndex].snapshot.game;
+  for (const tile of [...new Set(discarder.selfHand ?? [])]) {
+    const discard = { seat: discarder.viewerSeat, tile };
+    const createsReaction = messages.some((message, index) => {
+      if (index === discarderIndex) return false;
+      const game = message.snapshot.game;
+      return (
+        findDiscardReactionOptions(
+          toTiles(game.selfHand ?? []),
+          game.viewerSeat,
+          discard,
+          (game.melds ?? []).filter((meld) => meld.seat === game.viewerSeat),
+          game.wallRemaining,
+        ).length > 0
+      );
+    });
+    if (!createsReaction) return tile;
+  }
+  throw new Error("冒烟测试没有找到不会触发响应的安全弃牌");
+}
+
 const gameStartedWaits = connections.map((connection) => next(connection.socket, "snapshot", (message) => message.snapshot.phase === "playing"));
 first.send(JSON.stringify({ type: "start_game" }));
 const gameStartedMessages = await Promise.all(gameStartedWaits);
 const gameStarted = gameStartedMessages[0];
 const dealerSeat = gameStarted.snapshot.game?.dealerSeat;
 const dealerIndex = connections.findIndex((connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === dealerSeat);
-const dealerTile = gameStartedMessages[dealerIndex]?.snapshot.game?.selfHand?.[0];
+const dealerTile = chooseSafeDiscard(gameStartedMessages, dealerIndex);
 const discardWaits = connections.map((connection) =>
-  next(connection.socket, "snapshot", (message) => message.snapshot.game?.discards.length === 1),
+  next(
+    connection.socket,
+    "snapshot",
+    (message) => message.snapshot.game?.discards.length === 1 && message.snapshot.game?.stage === "awaiting_discard",
+  ),
 );
 connections[dealerIndex]?.socket.send(JSON.stringify({ type: "discard_tile", tile: dealerTile }));
 const discardedMessages = await Promise.all(discardWaits);
@@ -88,9 +124,13 @@ const nextPlayerIndex = connections.findIndex(
   (connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === nextSeat,
 );
 const nextPlayerAfterDraw = discardedMessages[nextPlayerIndex];
-const nextTile = nextPlayerAfterDraw.snapshot.game?.selfHand?.[0];
+const nextTile = chooseSafeDiscard(discardedMessages, nextPlayerIndex);
 const secondDiscardWaits = connections.map((connection) =>
-  next(connection.socket, "snapshot", (message) => message.snapshot.game?.discards.length === 2),
+  next(
+    connection.socket,
+    "snapshot",
+    (message) => message.snapshot.game?.discards.length === 2 && message.snapshot.game?.stage === "awaiting_discard",
+  ),
 );
 connections[nextPlayerIndex]?.socket.send(JSON.stringify({ type: "discard_tile", tile: nextTile }));
 const secondDiscardMessages = await Promise.all(secondDiscardWaits);
@@ -118,6 +158,7 @@ const result = {
   disconnectObserved: offline.snapshot.players.find((player) => player.id === joined.playerId)?.connected === false,
   originalSeatRestored: restored.playerId === joined.playerId,
   gamePhase: gameStarted.snapshot.phase,
+  modelVersion: gameStarted.snapshot.game?.modelVersion,
   wallRemaining: gameStarted.snapshot.game?.wallRemaining,
   handTileCounts: gameStarted.snapshot.game?.handTileCounts,
   hostPrivateHandCount: gameStarted.snapshot.game?.selfHand?.length,
@@ -147,6 +188,7 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
+  result.modelVersion !== "discard-reactions-v2" ||
   result.wallRemaining !== 83 ||
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
   ![13, 14].includes(result.hostPrivateHandCount) ||

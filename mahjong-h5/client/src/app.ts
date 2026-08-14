@@ -1,4 +1,4 @@
-import type { PlayerView, RoomSnapshot, ServerMessage, TileCode } from "../../shared/protocol.js";
+import type { PlayerView, ReactionOption, RoomSnapshot, ServerMessage, TileCode } from "../../shared/protocol.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
 type TablePosition = "bottom" | "right" | "top" | "left";
@@ -25,6 +25,7 @@ const selfHand = required<HTMLElement>("self-hand");
 const wallStatus = required<HTMLElement>("wall-status");
 const turnStatus = required<HTMLElement>("turn-status");
 const centerConsole = required<HTMLElement>("center-console");
+const operationPanel = required<HTMLElement>("operation-panel");
 const notice = required<HTMLElement>("notice");
 const gameNotice = required<HTMLElement>("game-notice");
 const connection = required<HTMLElement>("connection");
@@ -131,14 +132,22 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   renderWalls(game.wallRemaining);
   renderDiscards(game.discards, viewerSeat);
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
+  renderOperations(game.availableOperations ?? []);
 
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
   if (game.stage === "round_ended") {
-    turnStatus.textContent = "牌墙已空 · 本局流局";
+    if (game.roundResult?.reason === "discard_hu") {
+      const winners = game.roundResult.winnerSeats
+        .map((seat) => next.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`)
+        .join("、");
+      turnStatus.textContent = `${winners} 胡牌`;
+    } else {
+      turnStatus.textContent = "牌墙已空 · 本局流局";
+    }
   } else if (canDiscard) {
     turnStatus.textContent = "轮到你 · 请选择一张牌";
   } else if (game.stage === "awaiting_reactions") {
-    turnStatus.textContent = "正在结算响应";
+    turnStatus.textContent = game.availableOperations?.length ? "请响应这张牌" : "等待其他玩家响应";
   } else {
     const current = next.players.find((player) => player.seat === game.turnSeat);
     turnStatus.textContent = `等待 ${current?.name ?? `${game.turnSeat + 1}号位`} 出牌`;
@@ -171,8 +180,60 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
       for (let tile = 0; tile < handCount; tile += 1) rack.append(createTileBack());
       playerSeat.append(rack);
     }
+    const playerMelds = game.melds.filter((meld) => meld.seat === player.seat);
+    if (playerMelds.length > 0) {
+      const meldRack = document.createElement("div");
+      meldRack.className = "meld-rack";
+      for (const meld of playerMelds) {
+        const group = document.createElement("div");
+        group.className = "meld-group";
+        group.title = meld.kind === "chi" ? "吃" : meld.kind === "peng" ? "碰" : "杠";
+        for (const code of meld.tiles) group.append(createFaceTile(code, "meld", false));
+        meldRack.append(group);
+      }
+      playerSeat.append(meldRack);
+    }
     tableSeats.append(playerSeat);
   }
+}
+
+function renderOperations(options: ReactionOption[]): void {
+  operationPanel.replaceChildren();
+  operationPanel.classList.toggle("hidden", options.length === 0);
+  if (options.length === 0) return;
+  const labels: Record<ReactionOption["kind"], string> = { chi: "吃", peng: "碰", gang: "杠", hu: "胡" };
+  for (const option of options) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `operation-button operation-${option.kind}`;
+    const display = option.displayTiles.map(tileLabel).join(" ");
+    if (option.kind === "chi") {
+      button.classList.add("has-detail");
+      const label = document.createElement("strong");
+      label.textContent = labels[option.kind];
+      const detail = document.createElement("small");
+      detail.textContent = option.displayTiles.map(tileLabel).join("");
+      button.append(label, detail);
+    } else {
+      button.textContent = labels[option.kind];
+    }
+    button.title = display;
+    button.setAttribute("aria-label", `${labels[option.kind]} ${display}`.trim());
+    button.addEventListener("click", () => submitReaction(option.id, labels[option.kind]));
+    operationPanel.append(button);
+  }
+  const passButton = document.createElement("button");
+  passButton.type = "button";
+  passButton.className = "operation-button operation-pass";
+  passButton.textContent = "过";
+  passButton.addEventListener("click", () => submitReaction("pass", "过"));
+  operationPanel.append(passButton);
+}
+
+function submitReaction(operationId: string | "pass", label: string): void {
+  operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
+  send({ type: "react_to_discard", operationId });
+  showNotice(`已选择${label}，等待结算`);
 }
 
 function renderWalls(remaining: number): void {
@@ -222,7 +283,7 @@ function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canD
   }
 }
 
-function createFaceTile(code: TileCode, size: "hand" | "discard", interactive: boolean): HTMLElement {
+function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", interactive: boolean): HTMLElement {
   const tile = document.createElement(interactive ? "button" : "div");
   if (tile instanceof HTMLButtonElement) {
     tile.type = "button";

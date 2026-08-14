@@ -1,7 +1,24 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createFullTileSet } from "../src/game-model.js";
-import { RoomError, RoomManager } from "../src/room-manager.js";
+import type { RoomSnapshot } from "../../shared/protocol.js";
+import { GAME_MODEL_VERSION, createFullTileSet, validateInitialGame, type InitialGameState, type Tile } from "../src/game-model.js";
+import { RoomError, RoomManager, type Session } from "../src/room-manager.js";
+
+function passAllReactions(rooms: RoomManager, sessions: Session[], initial: RoomSnapshot): RoomSnapshot {
+  let snapshot = initial;
+  while (snapshot.game?.stage === "awaiting_reactions") {
+    let responded = false;
+    for (const session of sessions) {
+      const view = rooms.snapshotForPlayer(session.roomCode, session.playerToken);
+      if (!view.game?.availableOperations?.length) continue;
+      snapshot = rooms.reactToDiscard(session.roomCode, session.playerToken, "pass").snapshot;
+      responded = true;
+      if (snapshot.game?.stage !== "awaiting_reactions") break;
+    }
+    if (!responded) throw new Error("响应阶段没有可操作的真人玩家");
+  }
+  return snapshot;
+}
 
 test("四名玩家可以加入并同步准备状态", () => {
   const rooms = new RoomManager();
@@ -118,14 +135,14 @@ test("只有庄家可以从自己的手牌中执行首次出牌", () => {
     (error) => error instanceof RoomError && error.code === "TILE_NOT_IN_HAND",
   );
   const discarded = rooms.discardTile(dealer.roomCode, dealer.playerToken, tile);
+  const afterPasses = passAllReactions(rooms, sessions, discarded.snapshot);
   const nextSeat = (dealerSeat + 1) % 4;
-  assert.equal(discarded.snapshot.game?.stage, "awaiting_discard");
-  assert.deepEqual(discarded.snapshot.game?.latestDiscard, { seat: dealerSeat, tile });
-  assert.equal(discarded.snapshot.game?.handTileCounts[dealerSeat], 13);
-  assert.equal(discarded.snapshot.game?.handTileCounts[nextSeat], 14);
-  assert.equal(discarded.snapshot.game?.wallRemaining, 82);
-  assert.equal(discarded.snapshot.game?.selfHand, undefined);
-  assert.equal(discarded.diagnostics.nextTurnSeat, nextSeat);
+  assert.equal(afterPasses.game?.stage, "awaiting_discard");
+  assert.deepEqual(afterPasses.game?.latestDiscard, { seat: dealerSeat, tile });
+  assert.equal(afterPasses.game?.handTileCounts[dealerSeat], 13);
+  assert.equal(afterPasses.game?.handTileCounts[nextSeat], 14);
+  assert.equal(afterPasses.game?.wallRemaining, 82);
+  assert.equal(afterPasses.game?.selfHand, undefined);
   assert.throws(
     () => rooms.discardTile(dealer.roomCode, dealer.playerToken, tile),
     (error) => error instanceof RoomError && error.code === "TURN_REQUIRED",
@@ -137,9 +154,10 @@ test("只有庄家可以从自己的手牌中执行首次出牌", () => {
   const nextView = rooms.snapshotForPlayer(nextPlayer.roomCode, nextPlayer.playerToken);
   const nextTile = nextView.game!.selfHand![0]!;
   const secondDiscard = rooms.discardTile(nextPlayer.roomCode, nextPlayer.playerToken, nextTile);
-  assert.equal(secondDiscard.snapshot.game?.discards.length, 2);
-  assert.equal(secondDiscard.snapshot.game?.turnSeat, (nextSeat + 1) % 4);
-  assert.equal(secondDiscard.snapshot.game?.wallRemaining, 81);
+  const afterSecondPasses = passAllReactions(rooms, sessions, secondDiscard.snapshot);
+  assert.equal(afterSecondPasses.game?.discards.length, 2);
+  assert.equal(afterSecondPasses.game?.turnSeat, (nextSeat + 1) % 4);
+  assert.equal(afterSecondPasses.game?.wallRemaining, 81);
 });
 
 test("单人联调时测试玩家自动完成回合并把出牌权还给真人", () => {
@@ -152,18 +170,174 @@ test("单人联调时测试玩家自动完成回合并把出牌权还给真人",
   const tile = hostView.game!.selfHand![0]!;
 
   const progressed = rooms.discardTile(host.roomCode, host.playerToken, tile);
+  let finalSnapshot = progressed.snapshot;
+  const automaticDiscards = [...progressed.diagnostics.autoDiscards];
+  while (finalSnapshot.game?.stage === "awaiting_reactions") {
+    const hostReaction = rooms.snapshotForPlayer(host.roomCode, host.playerToken).game?.availableOperations;
+    assert.ok(hostReaction?.length);
+    const passed = rooms.reactToDiscard(host.roomCode, host.playerToken, "pass");
+    automaticDiscards.push(...passed.diagnostics.autoDiscards);
+    finalSnapshot = passed.snapshot;
+  }
 
-  assert.equal(progressed.diagnostics.autoDiscards.length, 3);
+  assert.equal(automaticDiscards.length, 3);
   assert.equal(progressed.diagnostics.initialDiscard.handTileCount, 13);
   assert.deepEqual(
-    progressed.diagnostics.autoDiscards.map((discard) => discard.wallRemaining),
+    automaticDiscards.map((discard) => discard.wallRemaining),
     [82, 81, 80],
   );
-  assert.equal(progressed.diagnostics.nextTurnSeat, 0);
-  assert.equal(progressed.snapshot.game?.stage, "awaiting_discard");
-  assert.equal(progressed.snapshot.game?.turnSeat, 0);
-  assert.equal(progressed.snapshot.game?.wallRemaining, 79);
-  assert.deepEqual(progressed.snapshot.game?.handTileCounts, [14, 13, 13, 13]);
-  assert.equal(progressed.snapshot.game?.discards.length, 4);
+  assert.equal(finalSnapshot.game?.stage, "awaiting_discard");
+  assert.equal(finalSnapshot.game?.turnSeat, 0);
+  assert.equal(finalSnapshot.game?.wallRemaining, 79);
+  assert.deepEqual(finalSnapshot.game?.handTileCounts, [14, 13, 13, 13]);
+  assert.equal(finalSnapshot.game?.discards.length, 4);
   assert.equal(rooms.snapshotForPlayer(host.roomCode, host.playerToken).game?.selfHand?.length, 14);
+});
+
+function createDeterministicFourPlayerGame(): { rooms: RoomManager; sessions: Session[]; started: RoomSnapshot } {
+  const rooms = new RoomManager(() => 0);
+  const sessions = [rooms.createRoom("东")];
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  const started = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
+  return { rooms, sessions, started };
+}
+
+test("弃牌响应候选只下发给有资格的玩家且过牌后下家正常摸牌", () => {
+  const { rooms, sessions, started } = createDeterministicFourPlayerGame();
+  assert.equal(started.game?.dealerSeat, 0);
+  const discarded = rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "wan-1");
+
+  assert.equal(discarded.snapshot.game?.stage, "awaiting_reactions");
+  assert.equal(discarded.snapshot.game?.availableOperations, undefined);
+  assert.deepEqual(discarded.snapshot.game?.reaction, {
+    discard: { seat: 0, tile: "wan-1" },
+    waitingCount: 1,
+    respondedCount: 0,
+  });
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken).game?.availableOperations, undefined);
+  const nextView = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+  assert.deepEqual(nextView.game?.availableOperations?.map((option) => option.kind), ["chi"]);
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, sessions[2]!.playerToken).game?.availableOperations, undefined);
+  assert.throws(
+    () => rooms.reactToDiscard(started.roomCode, sessions[2]!.playerToken, "pass"),
+    (error) => error instanceof RoomError && error.code === "REACTION_NOT_ELIGIBLE",
+  );
+
+  const passed = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, "pass");
+  assert.equal(passed.diagnostics.resolution, "all_passed");
+  assert.equal(passed.snapshot.game?.stage, "awaiting_discard");
+  assert.equal(passed.snapshot.game?.turnSeat, 1);
+  assert.equal(passed.snapshot.game?.wallRemaining, 82);
+  assert.equal(passed.snapshot.game?.handTileCounts[1], 14);
+});
+
+test("吃牌成功后移除弃牌和两张手牌并由吃牌者直接出牌", () => {
+  const { rooms, sessions, started } = createDeterministicFourPlayerGame();
+  rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "wan-1");
+  const nextView = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+  const chi = nextView.game!.availableOperations!.find((option) => option.kind === "chi")!;
+
+  const claimed = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, chi.id);
+
+  assert.equal(claimed.diagnostics.resolution, "meld_claimed");
+  assert.equal(claimed.snapshot.game?.stage, "awaiting_discard");
+  assert.equal(claimed.snapshot.game?.turnSeat, 1);
+  assert.equal(claimed.snapshot.game?.discards.length, 0);
+  assert.equal(claimed.snapshot.game?.handTileCounts[1], 11);
+  assert.deepEqual(claimed.snapshot.game?.melds, [{ seat: 1, kind: "chi", tiles: ["wan-1", "wan-2", "wan-3"], fromSeat: 0 }]);
+  assert.equal(claimed.snapshot.game?.wallRemaining, 83);
+});
+
+test("明杠从牌墙尾部补牌并把出牌权交给杠牌者", () => {
+  const { rooms, sessions, started } = createDeterministicFourPlayerGame();
+  const firstDiscard = rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "tong-5");
+  assert.equal(firstDiscard.snapshot.game?.turnSeat, 1);
+  rooms.discardTile(started.roomCode, sessions[1]!.playerToken, "wan-3");
+  const gangView = rooms.snapshotForPlayer(started.roomCode, sessions[2]!.playerToken);
+  const gang = gangView.game!.availableOperations!.find((option) => option.kind === "gang")!;
+
+  const claimed = rooms.reactToDiscard(started.roomCode, sessions[2]!.playerToken, gang.id);
+
+  assert.equal(claimed.snapshot.game?.stage, "awaiting_discard");
+  assert.equal(claimed.snapshot.game?.turnSeat, 2);
+  assert.equal(claimed.snapshot.game?.wallRemaining, 81);
+  assert.equal(claimed.snapshot.game?.handTileCounts[2], 11);
+  assert.equal(claimed.snapshot.game?.selfHand, undefined);
+  assert.deepEqual(claimed.snapshot.game?.melds.at(-1), {
+    seat: 2,
+    kind: "gang",
+    tiles: ["wan-3", "wan-3", "wan-3", "wan-3"],
+    fromSeat: 1,
+  });
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, sessions[2]!.playerToken).game?.selfDrawnTile !== undefined, true);
+});
+
+function createDiscardHuGame(): InitialGameState {
+  const pool = createFullTileSet();
+  const take = (code: Tile["code"]): Tile => {
+    const index = pool.findIndex((tile) => tile.code === code);
+    if (index < 0) throw new Error(`测试牌池缺少 ${code}`);
+    return pool.splice(index, 1)[0]!;
+  };
+  const winnerCodes: Tile["code"][] = [
+    "wan-1", "wan-2", "wan-3",
+    "tong-1", "tong-2", "tong-3",
+    "tiao-1", "tiao-2", "tiao-3",
+    "wan-9", "wan-9", "wan-9",
+    "east",
+  ];
+  const winnerHand = winnerCodes.map(take);
+  const dealerHand = [take("east"), ...pool.splice(0, 13)];
+  const thirdHand = pool.splice(0, 13);
+  const fourthHand = pool.splice(0, 13);
+  const game: InitialGameState = {
+    modelVersion: GAME_MODEL_VERSION,
+    roundNumber: 1,
+    dealerSeat: 0,
+    turnSeat: 0,
+    stage: "awaiting_discard",
+    hands: new Map([
+      [0, dealerHand],
+      [1, winnerHand],
+      [2, thirdHand],
+      [3, fourthHand],
+    ]),
+    wall: pool,
+    discards: [],
+    melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
+  };
+  validateInitialGame(game);
+  return game;
+}
+
+test("点炮胡响应结束本局并公开赢家、点炮者和胡牌张", () => {
+  const rooms = new RoomManager(() => 0, () => createDiscardHuGame());
+  const sessions = [rooms.createRoom("东")];
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  const started = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
+
+  rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "east");
+  const winnerView = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+  const hu = winnerView.game!.availableOperations!.find((option) => option.kind === "hu")!;
+  const result = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, hu.id);
+
+  assert.equal(result.diagnostics.resolution, "discard_hu");
+  assert.equal(result.snapshot.game?.stage, "round_ended");
+  assert.deepEqual(result.snapshot.game?.roundResult, {
+    reason: "discard_hu",
+    winnerSeats: [1],
+    fromSeat: 0,
+    tile: "east",
+  });
+  assert.throws(
+    () => rooms.discardTile(started.roomCode, sessions[1]!.playerToken, "wan-1"),
+    (error) => error instanceof RoomError && error.code === "ROUND_ENDED",
+  );
 });
