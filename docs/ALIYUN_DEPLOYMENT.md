@@ -157,3 +157,32 @@ pnpm start
 - 配置域名、HTTPS 和 WSS。
 - 仅对公网开放 80/443，关闭直接暴露的 3000 端口。
 - 房间状态迁移到 Redis，长期数据使用数据库保存。
+
+## 10. 排查房间问题时提取日志
+
+服务启动后会同时将结构化日志输出到终端和以下文件：
+
+```text
+/opt/CMCCmahjong/mahjong-h5/logs/server.jsonl
+```
+
+查看最近 200 行：
+
+```bash
+cd /opt/CMCCmahjong/mahjong-h5
+tail -n 200 logs/server.jsonl
+```
+
+只看失败请求：
+
+```bash
+grep '"event":"request_failed"' logs/server.jsonl | tail -n 50
+```
+
+只看服务启动、创建房间和加入房间：
+
+```bash
+grep -E '"event":"(server_started|room_created|room_joined|room_reconnected)"' logs/server.jsonl | tail -n 100
+```
+
+日志包含服务实例 ID、进程 PID、房间号、人数、操作和错误码，不记录玩家身份令牌。把相关行复制出来即可协助定位“服务是否重启”“请求是否进入同一实例”“房间为何不存在”等问题。

@@ -1,10 +1,12 @@
 import { createReadStream, existsSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { createServer } from "node:http";
 import { extname, join, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.js";
 import { RoomError, RoomManager, type Session } from "./room-manager.js";
+import { instanceId, logError, logInfo, logWarn, shortId } from "./logger.js";
 
 const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
 const manager = new RoomManager();
@@ -44,13 +46,21 @@ function broadcast(roomCode: string): void {
   }
 }
 
-function bindSession(socket: WebSocket, session: Session): void {
+function bindSession(socket: WebSocket, session: Session, connectionId: string, event: "room_created" | "room_joined" | "room_reconnected"): void {
   const oldSocket = socketsByToken.get(session.playerToken);
   if (oldSocket && oldSocket !== socket) oldSocket.close(4001, "已在新连接恢复");
   socketsByToken.set(session.playerToken, socket);
   sessionsBySocket.set(socket, { roomCode: session.roomCode, playerToken: session.playerToken });
   send(socket, { type: "session", ...session });
   broadcast(session.roomCode);
+  logInfo(event, {
+    connectionId,
+    roomCode: session.roomCode,
+    playerId: shortId(session.playerId),
+    playerCount: session.snapshot.players.length,
+    revision: session.snapshot.revision,
+    phase: session.snapshot.phase,
+  });
 }
 
 function requireSession(socket: WebSocket): { roomCode: string; playerToken: string } {
@@ -60,35 +70,51 @@ function requireSession(socket: WebSocket): { roomCode: string; playerToken: str
 }
 
 webSockets.on("connection", (socket) => {
+  const connectionId = randomUUID().slice(0, 8);
+  logInfo("websocket_connected", { connectionId });
+
   socket.on("message", (data) => {
+    let action = "unknown";
+    let requestedRoomCode: string | undefined;
     try {
       const message = JSON.parse(data.toString()) as ClientMessage;
+      action = message.type;
+      requestedRoomCode = "roomCode" in message ? message.roomCode : undefined;
       switch (message.type) {
-        case "create_room":
-          bindSession(socket, manager.createRoom(message.name));
+        case "create_room": {
+          const session = manager.createRoom(message.name);
+          bindSession(socket, session, connectionId, "room_created");
           break;
-        case "join_room":
-          bindSession(socket, manager.joinRoom(message.roomCode, message.name));
+        }
+        case "join_room": {
+          const session = manager.joinRoom(message.roomCode, message.name);
+          bindSession(socket, session, connectionId, "room_joined");
           break;
-        case "reconnect":
-          bindSession(socket, manager.reconnect(message.roomCode, message.playerToken));
+        }
+        case "reconnect": {
+          const session = manager.reconnect(message.roomCode, message.playerToken);
+          bindSession(socket, session, connectionId, "room_reconnected");
           break;
+        }
         case "set_ready": {
           const session = requireSession(socket);
-          manager.setReady(session.roomCode, session.playerToken, Boolean(message.ready));
+          const snapshot = manager.setReady(session.roomCode, session.playerToken, Boolean(message.ready));
           broadcast(session.roomCode);
+          logInfo("ready_changed", { connectionId, roomCode: session.roomCode, ready: Boolean(message.ready), revision: snapshot.revision });
           break;
         }
         case "fill_test_players": {
           const session = requireSession(socket);
-          manager.fillWithTestPlayers(session.roomCode, session.playerToken);
+          const snapshot = manager.fillWithTestPlayers(session.roomCode, session.playerToken);
           broadcast(session.roomCode);
+          logInfo("test_players_filled", { connectionId, roomCode: session.roomCode, playerCount: snapshot.players.length, revision: snapshot.revision });
           break;
         }
         case "start_game": {
           const session = requireSession(socket);
-          manager.startGame(session.roomCode, session.playerToken);
+          const snapshot = manager.startGame(session.roomCode, session.playerToken);
           broadcast(session.roomCode);
+          logInfo("game_started", { connectionId, roomCode: session.roomCode, playerCount: snapshot.players.length, revision: snapshot.revision });
           break;
         }
         case "ping":
@@ -100,21 +126,39 @@ webSockets.on("connection", (socket) => {
     } catch (error) {
       const code = error instanceof RoomError ? error.code : "BAD_MESSAGE";
       const message = error instanceof Error ? error.message : "请求格式错误";
+      logWarn("request_failed", { connectionId, action, roomCode: requestedRoomCode, code, message });
       send(socket, { type: "error", code, message });
     }
   });
 
-  socket.on("close", () => {
+  socket.on("close", (code) => {
     const session = sessionsBySocket.get(socket);
-    if (!session) return;
+    if (!session) {
+      logInfo("websocket_closed", { connectionId, closeCode: code, hadSession: false });
+      return;
+    }
     sessionsBySocket.delete(socket);
-    if (socketsByToken.get(session.playerToken) !== socket) return;
+    if (socketsByToken.get(session.playerToken) !== socket) {
+      logInfo("websocket_closed", { connectionId, roomCode: session.roomCode, closeCode: code, replaced: true });
+      return;
+    }
     socketsByToken.delete(session.playerToken);
     manager.disconnect(session.roomCode, session.playerToken);
     broadcast(session.roomCode);
+    logInfo("player_disconnected", { connectionId, roomCode: session.roomCode, closeCode: code });
+  });
+
+  socket.on("error", (error) => {
+    logError("websocket_error", { connectionId, message: error.message });
   });
 });
 
+server.on("error", (error) => {
+  const code = "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";
+  logError("server_error", { code, message: error.message });
+});
+
 server.listen(port, "0.0.0.0", () => {
-  console.log(`麻将联机样板已启动：http://localhost:${port}`);
+  logInfo("server_started", { port, nodeVersion: process.version });
+  console.log(`麻将联机样板已启动：http://localhost:${port}，实例：${instanceId}`);
 });
