@@ -310,6 +310,8 @@ function createDiscardHuGame(): InitialGameState {
     wall: pool,
     discards: [],
     melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
     lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
   };
   validateInitialGame(game);
@@ -332,12 +334,15 @@ test("点炮胡响应结束本局并公开赢家、点炮者和胡牌张", () =>
 
   assert.equal(result.diagnostics.resolution, "discard_hu");
   assert.equal(result.snapshot.game?.stage, "round_ended");
-  assert.deepEqual(result.snapshot.game?.roundResult, {
+  const roundResult = result.snapshot.game!.roundResult!;
+  assert.deepEqual({ reason: roundResult.reason, winnerSeats: roundResult.winnerSeats, fromSeat: roundResult.fromSeat, tile: roundResult.tile }, {
     reason: "discard_hu",
     winnerSeats: [1],
     fromSeat: 0,
     tile: "east",
   });
+  assert.deepEqual(roundResult.scoreDeltas, [-32, 48, -8, -8]);
+  assert.deepEqual(result.snapshot.scoreTotals, [168, 248, 192, 192]);
   assert.throws(
     () => rooms.discardTile(started.roomCode, sessions[1]!.playerToken, "wan-1"),
     (error) => error instanceof RoomError && error.code === "ROUND_ENDED",
@@ -378,6 +383,8 @@ function createSelfDrawGame(): InitialGameState {
     wall: pool,
     discards: [],
     melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
     lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
   };
   validateInitialGame(game);
@@ -398,7 +405,10 @@ test("自摸候选只下发给当前玩家并在确认后结束本局", () => {
   const result = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, "zimo");
   assert.equal(result.diagnostics.operation, "zimo");
   assert.equal(result.snapshot.game?.stage, "round_ended");
-  assert.deepEqual(result.snapshot.game?.roundResult, { reason: "self_draw_hu", winnerSeats: [0], tile: "east" });
+  assert.equal(result.snapshot.game?.roundResult?.reason, "self_draw_hu");
+  assert.equal(result.snapshot.game?.roundResult?.tile, "east");
+  assert.deepEqual(result.snapshot.game?.roundResult?.scoreDeltas, [96, -32, -32, -32]);
+  assert.deepEqual(result.snapshot.scoreTotals, [296, 168, 168, 168]);
 });
 
 function createConcealedGangGame(): InitialGameState {
@@ -416,6 +426,8 @@ function createConcealedGangGame(): InitialGameState {
     wall: pool,
     discards: [],
     melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
     lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
   };
 }
@@ -429,6 +441,8 @@ test("暗杠移除四张手牌、公开副露并从牌墙尾部补牌", () => {
   assert.equal(result.snapshot.game?.stage, "awaiting_discard");
   assert.equal(result.snapshot.game?.wallRemaining, 82);
   assert.equal(result.snapshot.game?.handTileCounts[0], 11);
+  assert.deepEqual(result.snapshot.game?.scoreDeltas, [12, -4, -4, -4]);
+  assert.deepEqual(result.snapshot.scoreTotals, [212, 196, 196, 196]);
   assert.deepEqual(result.snapshot.game?.melds, [{
     seat: 0,
     kind: "gang",
@@ -472,6 +486,8 @@ function createAddedGangGame(): InitialGameState {
       [0, [{ seat: 0, kind: "peng", tiles: pengTiles.map((tile) => tile.code), fromSeat: 2 }]],
       [1, []], [2, []], [3, []],
     ]),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
     lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
   };
 }
@@ -491,7 +507,8 @@ test("加杠先开启私有抢杠窗口，胡牌后保留原碰牌", () => {
 
   const result = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, "hu");
   assert.equal(result.diagnostics.resolution, "rob_kong_hu");
-  assert.deepEqual(result.snapshot.game?.roundResult, { reason: "rob_kong_hu", winnerSeats: [1], fromSeat: 0, tile: "wan-3" });
+  assert.equal(result.snapshot.game?.roundResult?.reason, "rob_kong_hu");
+  assert.deepEqual(result.snapshot.game?.roundResult?.scoreDeltas, [-16, 32, -8, -8]);
   assert.equal(result.snapshot.game?.melds[0]?.kind, "peng");
   assert.equal(result.snapshot.game?.wallRemaining, 83);
 });
@@ -508,6 +525,7 @@ test("无人抢杠时加杠升级原碰牌并从牌墙尾部补牌", () => {
   assert.equal(result.snapshot.game?.stage, "awaiting_discard");
   assert.equal(result.snapshot.game?.wallRemaining, 82);
   assert.equal(result.snapshot.game?.handTileCounts[0], 11);
+  assert.deepEqual(result.snapshot.game?.scoreDeltas, [6, -2, -2, -2]);
   assert.deepEqual(result.snapshot.game?.melds[0], {
     seat: 0,
     kind: "gang",
@@ -547,6 +565,8 @@ function createSpecialGangGame(): InitialGameState {
     wall: pool,
     discards: [],
     melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
     lastDraw: { seat: 0, tile: white },
   };
 }
@@ -566,7 +586,8 @@ test("中发白特殊杠先开启私有抢杠窗口，被抢后只扣除被抢�
 
   const result = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, "hu");
   assert.equal(result.diagnostics.resolution, "rob_kong_hu");
-  assert.deepEqual(result.snapshot.game?.roundResult, { reason: "rob_kong_hu", winnerSeats: [1], fromSeat: 0, tile: "white" });
+  assert.equal(result.snapshot.game?.roundResult?.reason, "rob_kong_hu");
+  assert.deepEqual(result.snapshot.game?.roundResult?.scoreDeltas, [-32, 48, -8, -8]);
   assert.equal(result.snapshot.game?.handTileCounts[0], 13);
   assert.deepEqual(result.snapshot.game?.melds, []);
   const finalDealerHand = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken).game!.selfHand!;
@@ -587,6 +608,7 @@ test("特殊杠全过后成立并允许手中多余字牌连续涨毛", () => {
   assert.equal(established.snapshot.game?.stage, "awaiting_discard");
   assert.equal(established.snapshot.game?.wallRemaining, 82);
   assert.equal(established.snapshot.game?.handTileCounts[0], 12);
+  assert.deepEqual(established.snapshot.game?.scoreDeltas, [6, -2, -2, -2]);
   assert.deepEqual(established.snapshot.game?.melds[0], {
     seat: 0,
     kind: "special_gang",
@@ -610,6 +632,8 @@ test("特殊杠全过后成立并允许手中多余字牌连续涨毛", () => {
   assert.equal(secondGrowth.snapshot.game?.wallRemaining, 80);
   assert.equal(secondGrowth.snapshot.game?.melds.length, 1);
   assert.equal(secondGrowth.snapshot.game?.melds[0]?.growthCount, 2);
+  assert.deepEqual(secondGrowth.snapshot.game?.scoreDeltas, [12, -4, -4, -4]);
+  assert.deepEqual(secondGrowth.snapshot.scoreTotals, [212, 196, 196, 196]);
   assert.deepEqual(secondGrowth.snapshot.game?.melds[0]?.tiles, ["red", "green", "white", "red", "green"]);
 });
 
@@ -643,6 +667,8 @@ function createZhangmaoRobGame(): InitialGameState {
       [0, [{ seat: 0, kind: "special_gang", specialType: "dragons", tiles: specialTiles.map((tile) => tile.code), fromSeat: 0, growthCount: 0 }]],
       [1, []], [2, []], [3, []],
     ]),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
     lastDraw: { seat: 0, tile: growthTile },
   };
 }

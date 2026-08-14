@@ -188,7 +188,7 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "special-kongs-v4" ||
+  result.modelVersion !== "scoring-ledger-v5" ||
   result.wallRemaining !== 83 ||
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
   ![13, 14].includes(result.hostPrivateHandCount) ||

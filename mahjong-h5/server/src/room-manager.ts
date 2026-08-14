@@ -1,6 +1,7 @@
 import { randomInt, randomUUID } from "node:crypto";
-import type { DiscardView, MeldView, ReactionOption, RoomSnapshot, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { DiscardView, MeldView, ReactionOption, RoomSnapshot, ScorePaymentView, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import {
+  analyzeWinningHand,
   createInitialGame,
   drawTileFromWall,
   drawTileFromWallEnd,
@@ -11,6 +12,7 @@ import {
   type InitialGameState,
   type Tile,
 } from "./game-model.js";
+import { calculateHuPayments, calculateKongPayments, calculateScoreDeltas } from "./scoring.js";
 
 type Player = {
   id: string;
@@ -28,6 +30,7 @@ type Room = {
   phase: "waiting" | "playing";
   hostPlayerId: string;
   players: Player[];
+  scoreTotals: number[];
   game?: InitialGameState;
 };
 
@@ -66,6 +69,7 @@ export type ReactionProgress = {
       | "special_gang_completed"
       | "zhangmao_completed";
     winningSeats: number[];
+    scorePayments: ScorePaymentView[];
     claimedMeld?: MeldView;
     autoDiscards: Array<{ seat: number; tile: TileCode; wallRemaining: number }>;
     reactionWindows: ReactionWindowDiagnostic[];
@@ -83,6 +87,7 @@ export type TurnOperationProgress = {
     tile?: TileCode;
     meld?: MeldView;
     reactionWindow?: ReactionWindowDiagnostic;
+    scorePayments: ScorePaymentView[];
     wallRemaining: number;
     stage: NonNullable<RoomSnapshot["game"]>["stage"];
   };
@@ -129,6 +134,7 @@ export class RoomManager {
       phase: "waiting",
       hostPlayerId: player.id,
       players: [player],
+      scoreTotals: [200, 200, 200, 200],
     };
     this.rooms.set(code, room);
     return this.toSession(room, player);
@@ -272,6 +278,7 @@ export class RoomManager {
     const hand = game.hands.get(player.seat);
     const melds = game.melds.get(player.seat);
     if (!hand || !melds) throw new Error("当前玩家牌组不存在");
+    const scorePaymentStart = game.scorePayments.length;
     const option = findTurnOperationOptions(hand, player.seat, melds, game.lastDraw, game.wall.length).find(
       (candidate) => candidate.id === operationId,
     );
@@ -282,10 +289,26 @@ export class RoomManager {
     let reactionWindow: ReactionWindowDiagnostic | undefined;
     if (option.kind === "zimo") {
       tile = game.lastDraw?.tile.code;
+      const analysis = analyzeWinningHand(hand, undefined, melds);
+      const settlement = calculateHuPayments({
+        winnerSeats: [player.seat],
+        dealerSeat: game.dealerSeat,
+        reason: "self_draw_hu",
+        analyses: new Map([[player.seat, analysis]]),
+        meldsBySeat: game.melds,
+      });
+      this.recordPayments(room, settlement.payments);
       game.pendingReaction = undefined;
       game.lastDraw = undefined;
       game.stage = "round_ended";
-      game.roundResult = { reason: "self_draw_hu", winnerSeats: [player.seat], tile };
+      game.roundResult = {
+        reason: "self_draw_hu",
+        winnerSeats: [player.seat],
+        tile,
+        winnerDetails: settlement.winnerDetails,
+        payments: [...game.scorePayments],
+        scoreDeltas: [...game.scoreDeltas],
+      };
     } else if (option.kind === "angang") {
       tile = option.tiles[0];
       if (!tile) throw new Error("暗杠牌张不存在");
@@ -350,10 +373,21 @@ export class RoomManager {
       }
     }
 
+    if (meld && option.kind !== "zimo") this.recordKongPayments(room, player.seat, option.kind);
+
     room.revision += 1;
     return {
       snapshot: this.snapshot(room.code),
-      diagnostics: { seat: player.seat, operation: option.kind, tile, meld, reactionWindow, wallRemaining: game.wall.length, stage: game.stage },
+      diagnostics: {
+        seat: player.seat,
+        operation: option.kind,
+        tile,
+        meld,
+        reactionWindow,
+        scorePayments: game.scorePayments.slice(scorePaymentStart),
+        wallRemaining: game.wall.length,
+        stage: game.stage,
+      },
     };
   }
 
@@ -366,6 +400,7 @@ export class RoomManager {
     if (room.phase !== "playing" || !game || game.stage !== "awaiting_reactions" || !pending) {
       throw new RoomError("REACTION_NOT_AVAILABLE", "当前没有等待你响应的弃牌");
     }
+    const scorePaymentStart = game.scorePayments.length;
     const options = pending.optionsBySeat.get(player.seat);
     if (!options?.length) throw new RoomError("REACTION_NOT_ELIGIBLE", "你不能响应这张弃牌");
     if (pending.responses.has(player.seat)) throw new RoomError("REACTION_ALREADY_SENT", "你已经响应过这张牌");
@@ -391,25 +426,46 @@ export class RoomManager {
       if (huClaims.length > 0) {
         winningSeats = huClaims.map((claim) => claim.seat);
         if (pending.pendingKong) this.restoreUnrobbedKongTiles(game, pending.pendingKong);
+        const roundReason = pending.source === "discard" ? "discard_hu" : "rob_kong_hu";
+        const analyses = new Map(
+          winningSeats.map((seat) => [
+            seat,
+            analyzeWinningHand(game.hands.get(seat) ?? [], pending.discard.tile, game.melds.get(seat) ?? []),
+          ]),
+        );
+        const settlement = calculateHuPayments({
+          winnerSeats: winningSeats,
+          fromSeat: pending.discard.seat,
+          dealerSeat: game.dealerSeat,
+          reason: roundReason,
+          analyses,
+          meldsBySeat: game.melds,
+        });
+        this.recordPayments(room, settlement.payments);
         game.pendingReaction = undefined;
         game.lastDraw = undefined;
         game.stage = "round_ended";
         game.roundResult = {
-          reason: pending.source === "discard" ? "discard_hu" : "rob_kong_hu",
+          reason: roundReason,
           winnerSeats: winningSeats,
           fromSeat: pending.discard.seat,
           tile: pending.discard.tile,
+          winnerDetails: settlement.winnerDetails,
+          payments: [...game.scorePayments],
+          scoreDeltas: [...game.scoreDeltas],
         };
         resolution = pending.source === "discard" ? "discard_hu" : "rob_kong_hu";
       } else if (selectedClaims.length > 0) {
         if (pending.source !== "discard") throw new Error("加杠响应窗口只能胡牌或过牌");
         const claim = selectedClaims[0]!;
         claimedMeld = this.applyMeldClaim(game, pending.discard, claim.seat, claim.option);
+        if (claim.option.kind === "gang") this.recordKongPayments(room, claim.seat, "gang");
         resolution = "meld_claimed";
       } else if (pending.source !== "discard") {
         if (!pending.pendingKong) throw new Error("待完成的抢杠操作不存在");
         game.pendingReaction = undefined;
         claimedMeld = this.finalizePendingKong(game, pending.pendingKong);
+        this.recordKongPayments(room, pending.pendingKong.seat, pending.pendingKong.type);
         resolution = pending.source === "added_gang"
           ? "added_gang_completed"
           : pending.source === "special_gang"
@@ -431,6 +487,7 @@ export class RoomManager {
         operationId,
         resolution,
         winningSeats,
+        scorePayments: game.scorePayments.slice(scorePaymentStart),
         claimedMeld,
         autoDiscards: progress.autoDiscards,
         reactionWindows: progress.reactionWindows,
@@ -469,6 +526,7 @@ export class RoomManager {
           isHost: player.id === room.hostPlayerId,
           isTestPlayer: player.isTestPlayer,
         })),
+      scoreTotals: [...room.scoreTotals],
       game: room.game
         ? {
             modelVersion: room.game.modelVersion,
@@ -488,6 +546,8 @@ export class RoomManager {
                 ? { ...meld, tiles: [], hiddenTileCount: meld.tiles.length }
                 : { ...meld },
             ),
+            scorePayments: [...room.game.scorePayments],
+            scoreDeltas: [...room.game.scoreDeltas],
             reaction: room.game.pendingReaction
               ? {
                   discard: room.game.pendingReaction.discard,
@@ -512,7 +572,13 @@ export class RoomManager {
                     room.game.wall.length,
                   )
                 : undefined,
-            roundResult: room.game.roundResult,
+            roundResult: room.game.roundResult
+              ? {
+                  ...room.game.roundResult,
+                  payments: room.game.roundResult.payments ?? [...room.game.scorePayments],
+                  scoreDeltas: room.game.roundResult.scoreDeltas ?? [...room.game.scoreDeltas],
+                }
+              : undefined,
           }
         : undefined,
     };
@@ -681,6 +747,34 @@ export class RoomManager {
     }
     hand.splice(0, hand.length, ...remaining);
     return taken;
+  }
+
+  private recordKongPayments(
+    room: Room,
+    seat: number,
+    operation: "gang" | "angang" | "jiagang" | "specialgang" | "zhangmao",
+  ): void {
+    const reason = operation === "gang"
+      ? "ming_gang"
+      : operation === "angang"
+        ? "an_gang"
+        : operation === "jiagang"
+          ? "jia_gang"
+          : operation === "specialgang"
+            ? "special_gang"
+            : "zhangmao";
+    this.recordPayments(room, calculateKongPayments(seat, reason));
+  }
+
+  private recordPayments(room: Room, payments: readonly ScorePaymentView[]): void {
+    const game = room.game;
+    if (!game) throw new Error("计分时牌局状态不存在");
+    const deltas = calculateScoreDeltas(payments);
+    game.scorePayments.push(...payments);
+    for (let seat = 0; seat < 4; seat += 1) {
+      game.scoreDeltas[seat] = (game.scoreDeltas[seat] ?? 0) + (deltas[seat] ?? 0);
+      room.scoreTotals[seat] = (room.scoreTotals[seat] ?? 200) + (deltas[seat] ?? 0);
+    }
   }
 
   private getRoom(rawCode: string): Room {

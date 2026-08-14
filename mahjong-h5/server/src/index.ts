@@ -280,6 +280,18 @@ webSockets.on("connection", (socket) => {
               revision: snapshot.revision,
             });
           }
+          if (diagnostics.scorePayments.length > 0) {
+            logInfo("score_settled", {
+              connectionId,
+              roomCode: session.roomCode,
+              trigger: diagnostics.operation,
+              paymentCount: diagnostics.scorePayments.length,
+              totalTransferred: diagnostics.scorePayments.reduce((sum, payment) => sum + payment.amount, 0),
+              roundScoreDeltas: snapshot.game?.scoreDeltas.join(","),
+              scoreTotals: snapshot.scoreTotals.join(","),
+              revision: snapshot.revision,
+            });
+          }
           break;
         }
         case "react_to_discard": {
@@ -347,6 +359,18 @@ webSockets.on("connection", (socket) => {
               reason: diagnostics.resolution,
               winnerSeats: diagnostics.winningSeats.join(","),
               winnerCount: diagnostics.winningSeats.length,
+              revision: snapshot.revision,
+            });
+          }
+          if (diagnostics.scorePayments.length > 0) {
+            logInfo("score_settled", {
+              connectionId,
+              roomCode: session.roomCode,
+              trigger: diagnostics.resolution,
+              paymentCount: diagnostics.scorePayments.length,
+              totalTransferred: diagnostics.scorePayments.reduce((sum, payment) => sum + payment.amount, 0),
+              roundScoreDeltas: snapshot.game?.scoreDeltas.join(","),
+              scoreTotals: snapshot.scoreTotals.join(","),
               revision: snapshot.revision,
             });
           }

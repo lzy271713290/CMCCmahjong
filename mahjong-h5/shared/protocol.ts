@@ -25,11 +25,31 @@ export type MeldView = {
   growthCount?: number;
   hiddenTileCount?: number;
 };
+export type ScoreReason =
+  | "self_draw"
+  | "discard_hu"
+  | "rob_kong_hu"
+  | "ming_gang"
+  | "an_gang"
+  | "jia_gang"
+  | "special_gang"
+  | "zhangmao";
+export type ScorePaymentView = { fromSeat: number; toSeat: number; amount: number; reason: ScoreReason };
+export type WinnerScoreView = {
+  seat: number;
+  isClosed: boolean;
+  isSevenPairs: boolean;
+  isPengPengHu: boolean;
+  isSanBuLao: boolean;
+};
 export type RoundResultView = {
   reason: "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted";
   winnerSeats: number[];
   fromSeat?: number;
   tile?: TileCode;
+  winnerDetails?: WinnerScoreView[];
+  payments?: ScorePaymentView[];
+  scoreDeltas?: number[];
 };
 
 export type PlayerView = {
@@ -47,6 +67,7 @@ export type RoomSnapshot = {
   revision: number;
   phase: "waiting" | "playing";
   players: PlayerView[];
+  scoreTotals: number[];
   game?: {
     modelVersion: string;
     roundNumber: number;
@@ -61,6 +82,8 @@ export type RoomSnapshot = {
     latestDiscard?: DiscardView;
     discards: DiscardView[];
     melds: MeldView[];
+    scorePayments: ScorePaymentView[];
+    scoreDeltas: number[];
     reaction?: {
       discard: DiscardView;
       source: "discard" | "added_gang" | "special_gang" | "zhangmao";

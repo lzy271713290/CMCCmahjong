@@ -129,6 +129,10 @@ body.in-game .shell { display: none; }
 .operation-angang, .operation-jiagang, .operation-specialgang, .operation-zhangmao { border-color: #bfe2ff; background: radial-gradient(circle at 35% 28%, #c9ecff, #4380a9 64%, #244d69); color: #f4fbff; }
 .operation-specialgang, .operation-zhangmao { border-color: #f1c5ff; background: radial-gradient(circle at 35% 28%, #f3d3ff, #8b50a5 64%, #4d2760); }
 .operation-pass { border-color: #9ec7b9; background: radial-gradient(circle at 35% 28%, #d2e5df, #6b9487 64%, #304f47); color: #173a31; }
+.score-summary { position: absolute; z-index: 33; right: 18%; bottom: 15%; left: 18%; display: grid; gap: 4px; padding: 9px 14px; border: 1px solid rgba(255,222,133,.72); border-radius: 10px; background: rgba(3,38,35,.9); box-shadow: 0 8px 22px rgba(0,0,0,.42); color: #fff2bd; text-align: center; }
+.score-summary strong { font-size: 16px; }
+.score-summary span { font-size: 12px; font-weight: 800; }
+.score-summary small { max-height: 32px; overflow: auto; color: #cce7df; font-size: 10px; line-height: 1.35; }
 
 .self-area { position: absolute; z-index: 25; right: 3.5%; bottom: max(1.8%, env(safe-area-inset-bottom)); left: 15%; display: flex; justify-content: center; }
 .self-hand { display: flex; align-items: flex-end; justify-content: center; gap: 3px; min-height: 70px; filter: drop-shadow(0 8px 7px rgba(0,0,0,.42)); }
@@ -179,6 +183,10 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .operation-button { width: 42px; height: 42px; font-size: 18px; }
   .operation-button.has-detail { width: 66px; }
   .operation-button.has-detail strong { font-size: 17px; }
+  .score-summary { right: 12%; bottom: 14%; left: 12%; gap: 2px; padding: 5px 9px; }
+  .score-summary strong { font-size: 12px; }
+  .score-summary span { font-size: 9px; }
+  .score-summary small { max-height: 24px; font-size: 8px; }
   .hand-tile { --tile-scale: .65; width: 36px !important; height: 55px; }
   .self-hand { min-height: 58px; gap: 2px; }
   .self-area { right: 2.5%; left: 14%; bottom: 1%; }

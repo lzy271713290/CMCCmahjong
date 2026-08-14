@@ -6,11 +6,12 @@ import type {
   NumberedSuit,
   ReactionOption,
   RoundResultView,
+  ScorePaymentView,
   TileCode,
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "special-kongs-v4";
+export const GAME_MODEL_VERSION = "scoring-ledger-v5";
 
 export type Tile = {
   code: TileCode;
@@ -43,6 +44,8 @@ export type InitialGameState = {
     responses: Map<number, string | "pass">;
   };
   roundResult?: RoundResultView;
+  scorePayments: ScorePaymentView[];
+  scoreDeltas: number[];
 };
 
 const NUMBERED_SUITS: NumberedSuit[] = ["wan", "tong", "tiao"];
@@ -122,6 +125,8 @@ export function createInitialGame(
     wall,
     discards: [],
     melds: new Map(seats.map((seat) => [seat, [] as MeldView[]])),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
     lastDraw: { seat: dealerSeat, tile: dealerDraw },
   };
   validateInitialGame(game);
@@ -256,55 +261,81 @@ export function selectReactionClaims(claims: readonly ReactionClaim[]): Reaction
 }
 
 export function canWinWithDiscard(hand: readonly Tile[], incoming: TileCode, melds: readonly MeldView[]): boolean {
-  return canWinCodes(hand.map((tile) => tile.code).concat(incoming), melds);
+  return analyzeWinCodes(hand.map((tile) => tile.code).concat(incoming), melds).valid;
 }
 
 export function canWinCompleteHand(hand: readonly Tile[], melds: readonly MeldView[]): boolean {
-  return canWinCodes(hand.map((tile) => tile.code), melds);
+  return analyzeWinCodes(hand.map((tile) => tile.code), melds).valid;
 }
 
-function canWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[]): boolean {
-  const allCodes = concealedCodes.concat(melds.flatMap((meld) => meld.tiles));
-  if (!NUMBERED_SUITS.every((suit) => allCodes.some((code) => code.startsWith(`${suit}-`)))) return false;
+export type WinningAnalysis = {
+  valid: boolean;
+  isSevenPairs: boolean;
+  isClosed: boolean;
+  isPengPengHu: boolean;
+  isSanBuLao: boolean;
+};
 
-  if (melds.length === 0 && isSevenPairs(concealedCodes)) return true;
+export function analyzeWinningHand(hand: readonly Tile[], incoming: TileCode | undefined, melds: readonly MeldView[]): WinningAnalysis {
+  return analyzeWinCodes(hand.map((tile) => tile.code).concat(incoming ?? []), melds);
+}
+
+function analyzeWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[]): WinningAnalysis {
+  const invalid = (): WinningAnalysis => ({ valid: false, isSevenPairs: false, isClosed: isClosedHand(melds), isPengPengHu: false, isSanBuLao: false });
+  const allCodes = concealedCodes.concat(melds.flatMap((meld) => meld.tiles));
+  if (!NUMBERED_SUITS.every((suit) => allCodes.some((code) => code.startsWith(`${suit}-`)))) return invalid();
+
+  if (melds.length === 0 && isSevenPairs(concealedCodes)) {
+    return { valid: true, isSevenPairs: true, isClosed: true, isPengPengHu: false, isSanBuLao: false };
+  }
   const groupsNeeded = 4 - melds.length;
-  if (groupsNeeded < 0 || concealedCodes.length !== groupsNeeded * 3 + 2) return false;
+  if (groupsNeeded < 0 || concealedCodes.length !== groupsNeeded * 3 + 2) return invalid();
 
   const exposed = melds.reduce(
     (stats, meld) => {
       if (meld.kind === "gang" || meld.kind === "special_gang") stats.hasGang = true;
       if (meld.kind === "peng" || meld.kind === "gang") {
         stats.hasTriplet = true;
+        stats.tripletCount += 1;
         if (isHonor(meld.tiles[0]!)) stats.hasHonorTriplet = true;
       }
+      if (meld.kind === "chi") stats.sequenceCount += 1;
+      if (meld.kind === "special_gang") stats.hasSpecialGang = true;
       if (meld.tiles.some(isTerminal)) stats.hasTerminalMeld = true;
       return stats;
     },
-    { hasGang: false, hasTriplet: false, hasHonorTriplet: false, hasTerminalMeld: false },
+    { hasGang: false, hasTriplet: false, hasHonorTriplet: false, hasTerminalMeld: false, hasSpecialGang: false, tripletCount: 0, sequenceCount: 0 },
   );
   const counts = countCodes(concealedCodes);
+  const validDecompositions: GroupStats[] = [];
 
   for (const [pairCode, count] of counts) {
     if (count < 2) continue;
     counts.set(pairCode, count - 2);
     const decompositions = collectGroupStats(counts, groupsNeeded);
     counts.set(pairCode, count);
-    if (
-      decompositions.some((closed) => {
+    validDecompositions.push(
+      ...decompositions.filter((closed) => {
         const hasGang = exposed.hasGang;
         const terminalSatisfied = hasGang || exposed.hasTerminalMeld || exposed.hasHonorTriplet || closed.hasTerminalMeld || closed.hasHonorTriplet;
         const tripletSatisfied = hasGang || exposed.hasTriplet || closed.hasTriplet;
         return terminalSatisfied && tripletSatisfied;
-      })
-    ) {
-      return true;
-    }
+      }),
+    );
   }
-  return false;
+  if (validDecompositions.length === 0) return invalid();
+  return {
+    valid: true,
+    isSevenPairs: false,
+    isClosed: isClosedHand(melds),
+    isPengPengHu: validDecompositions.some(
+      (closed) => !exposed.hasSpecialGang && exposed.sequenceCount === 0 && closed.sequenceCount === 0,
+    ),
+    isSanBuLao: validDecompositions.some((closed) => exposed.tripletCount + closed.tripletCount >= 3),
+  };
 }
 
-type GroupStats = { hasTriplet: boolean; hasHonorTriplet: boolean; hasTerminalMeld: boolean };
+type GroupStats = { hasTriplet: boolean; hasHonorTriplet: boolean; hasTerminalMeld: boolean; tripletCount: number; sequenceCount: number };
 
 function collectGroupStats(counts: Map<TileCode, number>, groupsRemaining: number, stats: GroupStats = emptyGroupStats()): GroupStats[] {
   const nextCode = [...TILE_ORDER.keys()].find((code) => (counts.get(code) ?? 0) > 0);
@@ -318,6 +349,8 @@ function collectGroupStats(counts: Map<TileCode, number>, groupsRemaining: numbe
     results.push(
       ...collectGroupStats(counts, groupsRemaining - 1, {
         hasTriplet: true,
+        tripletCount: stats.tripletCount + 1,
+        sequenceCount: stats.sequenceCount,
         hasHonorTriplet: stats.hasHonorTriplet || isHonor(nextCode),
         hasTerminalMeld: stats.hasTerminalMeld || isTerminal(nextCode),
       }),
@@ -337,6 +370,7 @@ function collectGroupStats(counts: Map<TileCode, number>, groupsRemaining: numbe
       results.push(
         ...collectGroupStats(counts, groupsRemaining - 1, {
           ...stats,
+          sequenceCount: stats.sequenceCount + 1,
           hasTerminalMeld: stats.hasTerminalMeld || rank === 1 || rank + 2 === 9,
         }),
       );
@@ -367,7 +401,11 @@ function tileCodeComparator(left: TileCode, right: TileCode): number {
 }
 
 function emptyGroupStats(): GroupStats {
-  return { hasTriplet: false, hasHonorTriplet: false, hasTerminalMeld: false };
+  return { hasTriplet: false, hasHonorTriplet: false, hasTerminalMeld: false, tripletCount: 0, sequenceCount: 0 };
+}
+
+export function isClosedHand(melds: readonly MeldView[]): boolean {
+  return melds.every((meld) => meld.kind === "gang" && meld.gangType === "an");
 }
 
 function isHonor(code: TileCode): boolean {

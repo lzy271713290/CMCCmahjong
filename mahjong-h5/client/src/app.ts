@@ -26,6 +26,7 @@ const wallStatus = required<HTMLElement>("wall-status");
 const turnStatus = required<HTMLElement>("turn-status");
 const centerConsole = required<HTMLElement>("center-console");
 const operationPanel = required<HTMLElement>("operation-panel");
+const scoreSummary = required<HTMLElement>("score-summary");
 const notice = required<HTMLElement>("notice");
 const gameNotice = required<HTMLElement>("game-notice");
 const connection = required<HTMLElement>("connection");
@@ -133,6 +134,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   renderDiscards(game.discards, viewerSeat);
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
   renderOperations(game.availableOperations ?? [], game.availableTurnOperations ?? []);
+  renderScoreSummary(next);
 
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
   if (game.stage === "round_ended") {
@@ -141,7 +143,8 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
         .map((seat) => next.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`)
         .join("、");
       const resultLabel = game.roundResult.reason === "self_draw_hu" ? "自摸" : game.roundResult.reason === "rob_kong_hu" ? "抢杠胡" : "胡牌";
-      turnStatus.textContent = `${winners} ${resultLabel}`;
+      const winnerGain = game.roundResult.winnerSeats.reduce((sum, seat) => sum + (game.scoreDeltas[seat] ?? 0), 0);
+      turnStatus.textContent = `${winners} ${resultLabel} · +${winnerGain}分`;
     } else {
       turnStatus.textContent = "牌墙已空 · 本局流局";
     }
@@ -172,7 +175,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     const info = document.createElement("div");
     info.className = "player-info";
     const role = player.seat === game.dealerSeat ? "庄" : winds[(player.seat - game.dealerSeat + 4) % 4];
-    info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张${player.isTestPlayer ? " · 托管" : ""}</span>`;
+    info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张 · ${next.scoreTotals[player.seat] ?? 200}分${player.isTestPlayer ? " · 托管" : ""}</span>`;
     info.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
     playerSeat.append(avatar, info);
 
@@ -280,6 +283,34 @@ function submitTurnOperation(operationId: string, label: string): void {
   operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
   send({ type: "perform_turn_operation", operationId });
   showNotice(`已选择${label}`);
+}
+
+function renderScoreSummary(next: RoomSnapshot): void {
+  const game = next.game;
+  const result = game?.roundResult;
+  scoreSummary.replaceChildren();
+  scoreSummary.classList.toggle("hidden", !game || game.stage !== "round_ended" || !result);
+  if (!game || game.stage !== "round_ended" || !result) return;
+
+  const title = document.createElement("strong");
+  title.textContent = result.winnerSeats.length > 0 ? "本局结算" : "本局流局";
+  const deltas = document.createElement("span");
+  deltas.textContent = next.players
+    .map((player) => `${player.name} ${(game.scoreDeltas[player.seat] ?? 0) >= 0 ? "+" : ""}${game.scoreDeltas[player.seat] ?? 0}`)
+    .join(" · ");
+  scoreSummary.append(title, deltas);
+
+  if (result.payments?.length) {
+    const detail = document.createElement("small");
+    detail.textContent = result.payments
+      .map((payment) => {
+        const from = next.players.find((player) => player.seat === payment.fromSeat)?.name ?? `${payment.fromSeat + 1}号位`;
+        const to = next.players.find((player) => player.seat === payment.toSeat)?.name ?? `${payment.toSeat + 1}号位`;
+        return `${from}→${to} ${payment.amount}分`;
+      })
+      .join(" · ");
+    scoreSummary.append(detail);
+  }
 }
 
 function renderWalls(remaining: number): void {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { TileCode } from "../../shared/protocol.js";
 import {
+  analyzeWinningHand,
   canWinCompleteHand,
   canWinWithDiscard,
   createFullTileSet,
@@ -222,4 +223,37 @@ test("特殊杠按一个有杠面子参与胡牌并豁免一九与刻子", () =>
     growthCount: 0,
   }];
   assert.equal(canWinCompleteHand(concealed, specialMeld), true);
+});
+
+test("胡牌分析识别闭门、碰碰胡和三不烙", () => {
+  const hand = makeTiles([
+    "wan-1", "wan-1", "wan-1",
+    "tong-2", "tong-2", "tong-2",
+    "tiao-3", "tiao-3", "tiao-3",
+    "east", "east", "east",
+    "wan-9", "wan-9",
+  ]);
+  assert.deepEqual(analyzeWinningHand(hand, undefined, []), {
+    valid: true,
+    isSevenPairs: false,
+    isClosed: true,
+    isPengPengHu: true,
+    isSanBuLao: true,
+  });
+});
+
+test("七小对分析保持闭门但不重复标记碰碰胡和三不烙", () => {
+  const hand = makeTiles([
+    "wan-1", "wan-1", "wan-2", "wan-2",
+    "tong-3", "tong-3", "tong-4", "tong-4",
+    "tiao-5", "tiao-5", "tiao-6", "tiao-6",
+    "east", "east",
+  ]);
+  assert.deepEqual(analyzeWinningHand(hand, undefined, []), {
+    valid: true,
+    isSevenPairs: true,
+    isClosed: true,
+    isPengPengHu: false,
+    isSanBuLao: false,
+  });
 });
