@@ -10,7 +10,7 @@ import type {
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "turn-operations-v3";
+export const GAME_MODEL_VERSION = "special-kongs-v4";
 
 export type Tile = {
   code: TileCode;
@@ -30,8 +30,15 @@ export type InitialGameState = {
   lastDraw?: { seat: number; tile: Tile };
   pendingReaction?: {
     discard: DiscardView;
-    source: "discard" | "added_gang";
-    addedGang?: { seat: number; meldIndex: number; tile: Tile };
+    source: "discard" | "added_gang" | "special_gang" | "zhangmao";
+    pendingKong?: {
+      seat: number;
+      type: "jiagang" | "specialgang" | "zhangmao";
+      tiles: Tile[];
+      robTile: TileCode;
+      meldIndex?: number;
+      specialType?: "dragons" | "winds";
+    };
     optionsBySeat: Map<number, ReactionOption[]>;
     responses: Map<number, string | "pass">;
   };
@@ -40,6 +47,10 @@ export type InitialGameState = {
 
 const NUMBERED_SUITS: NumberedSuit[] = ["wan", "tong", "tiao"];
 const HONOR_TILES: HonorTile[] = ["east", "south", "west", "north", "red", "green", "white"];
+const SPECIAL_GANGS = {
+  dragons: ["red", "green", "white"],
+  winds: ["east", "south", "west", "north"],
+} as const satisfies Record<"dragons" | "winds", readonly TileCode[]>;
 const TILE_ORDER = new Map<TileCode, number>(
   [...NUMBERED_SUITS.flatMap((suit) => Array.from({ length: 9 }, (_, index) => `${suit}-${index + 1}` as TileCode)), ...HONOR_TILES].map(
     (code, index) => [code, index],
@@ -218,6 +229,19 @@ export function findTurnOperationOptions(
       options.push({ id: `jiagang:${meldIndex}:${code}`, kind: "jiagang", tiles: [code] });
     }
   });
+  for (const [specialType, requiredCodes] of Object.entries(SPECIAL_GANGS) as Array<
+    [keyof typeof SPECIAL_GANGS, readonly TileCode[]]
+  >) {
+    if (!melds.some((meld) => meld.kind === "special_gang" && meld.specialType === specialType) && requiredCodes.every((code) => (counts.get(code) ?? 0) > 0)) {
+      options.push({ id: `specialgang:${specialType}`, kind: "specialgang", tiles: [...requiredCodes] });
+    }
+  }
+  melds.forEach((meld, meldIndex) => {
+    if (meld.kind !== "special_gang" || !meld.specialType) return;
+    for (const code of SPECIAL_GANGS[meld.specialType]) {
+      if ((counts.get(code) ?? 0) > 0) options.push({ id: `zhangmao:${meldIndex}:${code}`, kind: "zhangmao", tiles: [code] });
+    }
+  });
   return options;
 }
 
@@ -249,7 +273,7 @@ function canWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[]): bo
 
   const exposed = melds.reduce(
     (stats, meld) => {
-      if (meld.kind === "gang") stats.hasGang = true;
+      if (meld.kind === "gang" || meld.kind === "special_gang") stats.hasGang = true;
       if (meld.kind === "peng" || meld.kind === "gang") {
         stats.hasTriplet = true;
         if (isHonor(meld.tiles[0]!)) stats.hasHonorTriplet = true;

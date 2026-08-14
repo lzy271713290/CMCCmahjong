@@ -56,7 +56,15 @@ export type ReactionProgress = {
   diagnostics: {
     responderSeat: number;
     operationId: string | "pass";
-    resolution: "waiting" | "all_passed" | "meld_claimed" | "discard_hu" | "rob_kong_hu" | "added_gang_completed";
+    resolution:
+      | "waiting"
+      | "all_passed"
+      | "meld_claimed"
+      | "discard_hu"
+      | "rob_kong_hu"
+      | "added_gang_completed"
+      | "special_gang_completed"
+      | "zhangmao_completed";
     winningSeats: number[];
     claimedMeld?: MeldView;
     autoDiscards: Array<{ seat: number; tile: TileCode; wallRemaining: number }>;
@@ -287,12 +295,16 @@ export class RoomManager {
       game.lastDraw = undefined;
       drawTileFromWallEnd(game, player.seat);
     } else {
-      tile = option.tiles[0];
-      const [, rawMeldIndex] = option.id.split(":");
-      const meldIndex = Number(rawMeldIndex);
-      const physicalTileIndex = hand.findIndex((candidate) => candidate.code === tile);
-      if (!tile || !Number.isInteger(meldIndex) || physicalTileIndex < 0) throw new Error("加杠状态不一致");
-      const physicalTile = hand.splice(physicalTileIndex, 1)[0]!;
+      const parts = option.id.split(":");
+      const meldIndex = option.kind === "jiagang" || option.kind === "zhangmao" ? Number(parts[1]) : undefined;
+      const specialType = option.kind === "specialgang" ? (parts[1] as "dragons" | "winds") : undefined;
+      tile = option.kind === "specialgang" && game.lastDraw?.seat === player.seat && option.tiles.includes(game.lastDraw.tile.code)
+        ? game.lastDraw.tile.code
+        : option.tiles[0];
+      if (!tile || ((option.kind === "jiagang" || option.kind === "zhangmao") && !Number.isInteger(meldIndex))) {
+        throw new Error("可抢杠操作状态不一致");
+      }
+      const physicalTiles = this.takeTilesFromHand(hand, option.tiles);
       const discard = { seat: player.seat, tile };
       const optionsBySeat = new Map<number, ReactionOption[]>();
       for (const candidate of room.players) {
@@ -320,13 +332,21 @@ export class RoomManager {
         awaitingSeats,
         resolution: awaitingSeats.length > 0 ? "awaiting_players" : "advance_turn",
       };
-      const addedGang = { seat: player.seat, meldIndex, tile: physicalTile };
+      const pendingKong: NonNullable<NonNullable<InitialGameState["pendingReaction"]>["pendingKong"]> = {
+        seat: player.seat,
+        type: option.kind,
+        tiles: physicalTiles,
+        robTile: tile,
+        meldIndex,
+        specialType,
+      };
+      const source = option.kind === "jiagang" ? "added_gang" : option.kind === "specialgang" ? "special_gang" : "zhangmao";
       game.lastDraw = undefined;
       if (awaitingSeats.length > 0) {
-        game.pendingReaction = { discard, source: "added_gang", addedGang, optionsBySeat, responses };
+        game.pendingReaction = { discard, source, pendingKong, optionsBySeat, responses };
         game.stage = "awaiting_reactions";
       } else {
-        meld = this.finalizeAddedGang(game, addedGang);
+        meld = this.finalizePendingKong(game, pendingKong);
       }
     }
 
@@ -370,26 +390,31 @@ export class RoomManager {
       const huClaims = selectedClaims.filter((claim) => claim.option.kind === "hu");
       if (huClaims.length > 0) {
         winningSeats = huClaims.map((claim) => claim.seat);
+        if (pending.pendingKong) this.restoreUnrobbedKongTiles(game, pending.pendingKong);
         game.pendingReaction = undefined;
         game.lastDraw = undefined;
         game.stage = "round_ended";
         game.roundResult = {
-          reason: pending.source === "added_gang" ? "rob_kong_hu" : "discard_hu",
+          reason: pending.source === "discard" ? "discard_hu" : "rob_kong_hu",
           winnerSeats: winningSeats,
           fromSeat: pending.discard.seat,
           tile: pending.discard.tile,
         };
-        resolution = pending.source === "added_gang" ? "rob_kong_hu" : "discard_hu";
+        resolution = pending.source === "discard" ? "discard_hu" : "rob_kong_hu";
       } else if (selectedClaims.length > 0) {
         if (pending.source !== "discard") throw new Error("加杠响应窗口只能胡牌或过牌");
         const claim = selectedClaims[0]!;
         claimedMeld = this.applyMeldClaim(game, pending.discard, claim.seat, claim.option);
         resolution = "meld_claimed";
-      } else if (pending.source === "added_gang") {
-        if (!pending.addedGang) throw new Error("待完成的加杠状态不存在");
+      } else if (pending.source !== "discard") {
+        if (!pending.pendingKong) throw new Error("待完成的抢杠操作不存在");
         game.pendingReaction = undefined;
-        claimedMeld = this.finalizeAddedGang(game, pending.addedGang);
-        resolution = "added_gang_completed";
+        claimedMeld = this.finalizePendingKong(game, pending.pendingKong);
+        resolution = pending.source === "added_gang"
+          ? "added_gang_completed"
+          : pending.source === "special_gang"
+            ? "special_gang_completed"
+            : "zhangmao_completed";
       } else {
         game.pendingReaction = undefined;
         this.progressFromDiscard(room, pending.discard, progress, true);
@@ -458,7 +483,11 @@ export class RoomManager {
             selfDrawnTile: viewer && room.game.lastDraw?.seat === viewer.seat ? room.game.lastDraw.tile.code : undefined,
             latestDiscard: room.game.discards.at(-1),
             discards: [...room.game.discards],
-            melds: [...room.game.melds.values()].flat(),
+            melds: [...room.game.melds.values()].flat().map((meld) =>
+              meld.gangType === "an" && viewer?.seat !== meld.seat
+                ? { ...meld, tiles: [], hiddenTileCount: meld.tiles.length }
+                : { ...meld },
+            ),
             reaction: room.game.pendingReaction
               ? {
                   discard: room.game.pendingReaction.discard,
@@ -580,26 +609,78 @@ export class RoomManager {
     return meld;
   }
 
-  private finalizeAddedGang(game: InitialGameState, addedGang: NonNullable<InitialGameState["pendingReaction"]>["addedGang"]): MeldView {
-    if (!addedGang) throw new Error("待完成的加杠状态不存在");
-    const meld = game.melds.get(addedGang.seat)?.[addedGang.meldIndex];
-    if (!meld || meld.kind !== "peng" || meld.tiles[0] !== addedGang.tile.code) throw new Error("原碰牌组与加杠状态不一致");
-    meld.kind = "gang";
-    meld.gangType = "jia";
-    meld.tiles = [...meld.tiles, addedGang.tile.code];
+  private finalizePendingKong(
+    game: InitialGameState,
+    pendingKong: NonNullable<NonNullable<InitialGameState["pendingReaction"]>["pendingKong"]>,
+  ): MeldView {
+    const playerMelds = game.melds.get(pendingKong.seat);
+    if (!playerMelds) throw new Error("杠牌玩家的副露不存在");
+    let meld: MeldView;
+    if (pendingKong.type === "jiagang") {
+      const original = playerMelds[pendingKong.meldIndex ?? -1];
+      const tile = pendingKong.tiles[0];
+      if (!original || original.kind !== "peng" || !tile || original.tiles[0] !== tile.code) throw new Error("原碰牌组与加杠状态不一致");
+      original.kind = "gang";
+      original.gangType = "jia";
+      original.tiles = [...original.tiles, tile.code];
+      meld = original;
+    } else if (pendingKong.type === "specialgang") {
+      if (!pendingKong.specialType) throw new Error("特殊杠类型不存在");
+      meld = {
+        seat: pendingKong.seat,
+        kind: "special_gang",
+        tiles: pendingKong.tiles.map((tile) => tile.code),
+        fromSeat: pendingKong.seat,
+        specialType: pendingKong.specialType,
+        growthCount: 0,
+      };
+      playerMelds.push(meld);
+    } else {
+      const original = playerMelds[pendingKong.meldIndex ?? -1];
+      const tile = pendingKong.tiles[0];
+      if (!original || original.kind !== "special_gang" || !original.specialType || !tile) throw new Error("原特殊杠与涨毛状态不一致");
+      original.tiles = [...original.tiles, tile.code];
+      original.growthCount = (original.growthCount ?? 0) + 1;
+      meld = original;
+    }
     game.pendingReaction = undefined;
     game.lastDraw = undefined;
-    game.turnSeat = addedGang.seat;
-    drawTileFromWallEnd(game, addedGang.seat);
+    game.turnSeat = pendingKong.seat;
+    drawTileFromWallEnd(game, pendingKong.seat);
     return meld;
   }
 
-  private removeTilesFromHand(hand: Tile[], codes: readonly TileCode[]): void {
-    for (const code of codes) {
-      const index = hand.findIndex((tile) => tile.code === code);
-      if (index < 0) throw new Error("操作所需手牌不存在");
-      hand.splice(index, 1);
+  private restoreUnrobbedKongTiles(
+    game: InitialGameState,
+    pendingKong: NonNullable<NonNullable<InitialGameState["pendingReaction"]>["pendingKong"]>,
+  ): void {
+    const hand = game.hands.get(pendingKong.seat);
+    if (!hand) throw new Error("被抢杠玩家手牌不存在");
+    let robbedTileRemoved = false;
+    for (const tile of pendingKong.tiles) {
+      if (!robbedTileRemoved && tile.code === pendingKong.robTile) {
+        robbedTileRemoved = true;
+        continue;
+      }
+      hand.push(tile);
     }
+    if (!robbedTileRemoved) throw new Error("抢杠牌不在待确认牌组中");
+  }
+
+  private removeTilesFromHand(hand: Tile[], codes: readonly TileCode[]): void {
+    this.takeTilesFromHand(hand, codes);
+  }
+
+  private takeTilesFromHand(hand: Tile[], codes: readonly TileCode[]): Tile[] {
+    const remaining = [...hand];
+    const taken: Tile[] = [];
+    for (const code of codes) {
+      const index = remaining.findIndex((tile) => tile.code === code);
+      if (index < 0) throw new Error("操作所需手牌不存在");
+      taken.push(remaining.splice(index, 1)[0]!);
+    }
+    hand.splice(0, hand.length, ...remaining);
+    return taken;
   }
 
   private getRoom(rawCode: string): Room {

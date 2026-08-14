@@ -9,7 +9,7 @@ export type ReactionOption = {
   consumeTiles: TileCode[];
   displayTiles: TileCode[];
 };
-export type TurnOperationKind = "angang" | "jiagang" | "zimo";
+export type TurnOperationKind = "angang" | "jiagang" | "specialgang" | "zhangmao" | "zimo";
 export type TurnOperationOption = {
   id: string;
   kind: TurnOperationKind;
@@ -17,10 +17,13 @@ export type TurnOperationOption = {
 };
 export type MeldView = {
   seat: number;
-  kind: "chi" | "peng" | "gang";
+  kind: "chi" | "peng" | "gang" | "special_gang";
   tiles: TileCode[];
   fromSeat: number;
   gangType?: "ming" | "an" | "jia";
+  specialType?: "dragons" | "winds";
+  growthCount?: number;
+  hiddenTileCount?: number;
 };
 export type RoundResultView = {
   reason: "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted";
@@ -60,7 +63,7 @@ export type RoomSnapshot = {
     melds: MeldView[];
     reaction?: {
       discard: DiscardView;
-      source: "discard" | "added_gang";
+      source: "discard" | "added_gang" | "special_gang" | "zhangmao";
       waitingCount: number;
       respondedCount: number;
     };

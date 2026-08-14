@@ -149,7 +149,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
     turnStatus.textContent = "轮到你 · 请选择一张牌";
   } else if (game.stage === "awaiting_reactions") {
     turnStatus.textContent = game.availableOperations?.length
-      ? game.reaction?.source === "added_gang" ? "可以抢杠胡" : "请响应这张牌"
+      ? game.reaction?.source !== "discard" ? "可以抢杠胡" : "请响应这张牌"
       : "等待其他玩家响应";
   } else {
     const current = next.players.find((player) => player.seat === game.turnSeat);
@@ -190,8 +190,19 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
       for (const meld of playerMelds) {
         const group = document.createElement("div");
         group.className = "meld-group";
-        group.title = meld.kind === "chi" ? "吃" : meld.kind === "peng" ? "碰" : meld.gangType === "an" ? "暗杠" : meld.gangType === "jia" ? "加杠" : "明杠";
+        group.title = meld.kind === "chi"
+          ? "吃"
+          : meld.kind === "peng"
+            ? "碰"
+            : meld.kind === "special_gang"
+              ? `${meld.specialType === "dragons" ? "中发白特殊杠" : "东南西北特殊杠"}${meld.growthCount ? ` · 涨毛${meld.growthCount}次` : ""}`
+              : meld.gangType === "an" ? "暗杠" : meld.gangType === "jia" ? "加杠" : "明杠";
         for (const code of meld.tiles) group.append(createFaceTile(code, "meld", false));
+        for (let hidden = 0; hidden < (meld.hiddenTileCount ?? 0); hidden += 1) {
+          const back = createTileBack();
+          back.classList.add("meld-back");
+          group.append(back);
+        }
         meldRack.append(group);
       }
       playerSeat.append(meldRack);
@@ -233,11 +244,17 @@ function renderOperations(options: ReactionOption[], turnOptions: TurnOperationO
     passButton.addEventListener("click", () => submitReaction("pass", "过"));
     operationPanel.append(passButton);
   }
-  const turnLabels: Record<TurnOperationOption["kind"], string> = { angang: "暗杠", jiagang: "加杠", zimo: "自摸" };
+  const turnLabels: Record<TurnOperationOption["kind"], string> = {
+    angang: "暗杠",
+    jiagang: "加杠",
+    specialgang: "特殊杠",
+    zhangmao: "涨毛",
+    zimo: "自摸",
+  };
   for (const option of turnOptions) {
     const button = document.createElement("button");
     button.type = "button";
-    button.className = `operation-button operation-${option.kind}${option.kind === "angang" || option.kind === "jiagang" ? " has-detail" : ""}`;
+    button.className = `operation-button operation-${option.kind}${option.kind !== "zimo" ? " has-detail" : ""}`;
     const label = turnLabels[option.kind];
     if (option.kind === "zimo") button.textContent = label;
     else {

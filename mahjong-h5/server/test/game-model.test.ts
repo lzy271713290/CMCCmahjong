@@ -180,3 +180,46 @@ test("自回合候选包含暗杠和已有碰牌的加杠且空墙禁杠", () =>
   assert.equal(options.find((option) => option.kind === "jiagang")?.id, "jiagang:0:red");
   assert.deepEqual(findTurnOperationOptions(hand, 0, melds, undefined, 0), []);
 });
+
+test("中发白和东南西北齐全时生成两种特殊杠候选", () => {
+  const hand = makeTiles(["red", "green", "white", "east", "south", "west", "north", "wan-2"]);
+  const options = findTurnOperationOptions(hand, 0, [], { seat: 0, tile: hand[2]! }, 20);
+  assert.deepEqual(
+    options.filter((option) => option.kind === "specialgang").map((option) => ({ id: option.id, tiles: option.tiles })),
+    [
+      { id: "specialgang:dragons", tiles: ["red", "green", "white"] },
+      { id: "specialgang:winds", tiles: ["east", "south", "west", "north"] },
+    ],
+  );
+  assert.equal(findTurnOperationOptions(hand, 0, [], undefined, 0).some((option) => option.kind === "specialgang"), false);
+});
+
+test("特殊杠成立后对应字牌逐张生成涨毛候选", () => {
+  const hand = makeTiles(["red", "red", "north", "wan-2"]);
+  const melds = [
+    { seat: 0, kind: "special_gang" as const, specialType: "dragons" as const, tiles: ["red", "green", "white"] as TileCode[], fromSeat: 0, growthCount: 0 },
+    { seat: 0, kind: "special_gang" as const, specialType: "winds" as const, tiles: ["east", "south", "west", "north"] as TileCode[], fromSeat: 0, growthCount: 0 },
+  ];
+  assert.deepEqual(
+    findTurnOperationOptions(hand, 0, melds, undefined, 20).filter((option) => option.kind === "zhangmao").map((option) => option.id),
+    ["zhangmao:0:red", "zhangmao:1:north"],
+  );
+});
+
+test("特殊杠按一个有杠面子参与胡牌并豁免一九与刻子", () => {
+  const concealed = makeTiles([
+    "wan-2", "wan-3", "wan-4",
+    "tong-2", "tong-3", "tong-4",
+    "tiao-2", "tiao-3", "tiao-4",
+    "east", "east",
+  ]);
+  const specialMeld = [{
+    seat: 0,
+    kind: "special_gang" as const,
+    specialType: "dragons" as const,
+    tiles: ["red", "green", "white"] as TileCode[],
+    fromSeat: 0,
+    growthCount: 0,
+  }];
+  assert.equal(canWinCompleteHand(concealed, specialMeld), true);
+});
