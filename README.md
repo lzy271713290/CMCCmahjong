@@ -9,7 +9,7 @@
 - 房主可一键补齐测试玩家并开始测试对局。
 - 服务端使用 TypeScript 和 WebSocket，客户端使用移动端 H5。
 - 已整理幼麟四川麻将的牌桌背景、麻将牌和牌桌操作图集。
-- 麻将规则文档位于 `deliverables/`。
+- 最新麻将规则源文件位于 `docs/GAME_RULES.md`，可直接在 GitHub 查看和比对；Word 固化稿位于 `deliverables/`。
 
 ## 回家后继续开发
 
@@ -26,7 +26,9 @@ pnpm start
 ## 目录
 
 - `mahjong-h5/`：H5 客户端、TypeScript 服务端、测试和牌桌素材。
-- `deliverables/`：麻将规则需求规格文档。
+- `docs/GAME_RULES.md`：麻将规则 v0.2 的可追踪源文件。
+- `deliverables/`：麻将规则需求规格 Word 固化稿，保留历史版本。
+- `scripts/build_mahjong_rules_docx.py`：从规则源文件生成 Word 固化稿。
 - `docs/`：项目进度和阿里云部署记录。
 - `sources/`：项目同步参考目录。
 

@@ -12,6 +12,7 @@ reference-projects/
 !.env.example
 *.log
 **/logs/
+.tmp/
 .DS_Store
 Thumbs.db
 
