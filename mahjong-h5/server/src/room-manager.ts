@@ -1,13 +1,15 @@
 import { randomInt, randomUUID } from "node:crypto";
-import type { DiscardView, MeldView, ReactionOption, RoomSnapshot, TileCode } from "../../shared/protocol.js";
+import type { DiscardView, MeldView, ReactionOption, RoomSnapshot, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import {
   createInitialGame,
   drawTileFromWall,
   drawTileFromWallEnd,
   findDiscardReactionOptions,
+  findTurnOperationOptions,
   selectReactionClaims,
   sortTiles,
   type InitialGameState,
+  type Tile,
 } from "./game-model.js";
 
 type Player = {
@@ -54,12 +56,25 @@ export type ReactionProgress = {
   diagnostics: {
     responderSeat: number;
     operationId: string | "pass";
-    resolution: "waiting" | "all_passed" | "meld_claimed" | "discard_hu";
+    resolution: "waiting" | "all_passed" | "meld_claimed" | "discard_hu" | "rob_kong_hu" | "added_gang_completed";
     winningSeats: number[];
     claimedMeld?: MeldView;
     autoDiscards: Array<{ seat: number; tile: TileCode; wallRemaining: number }>;
     reactionWindows: ReactionWindowDiagnostic[];
     nextTurnSeat?: number;
+    wallRemaining: number;
+    stage: NonNullable<RoomSnapshot["game"]>["stage"];
+  };
+};
+
+export type TurnOperationProgress = {
+  snapshot: RoomSnapshot;
+  diagnostics: {
+    seat: number;
+    operation: TurnOperationOption["kind"];
+    tile?: TileCode;
+    meld?: MeldView;
+    reactionWindow?: ReactionWindowDiagnostic;
     wallRemaining: number;
     stage: NonNullable<RoomSnapshot["game"]>["stage"];
   };
@@ -236,6 +251,92 @@ export class RoomManager {
     };
   }
 
+  performTurnOperation(rawCode: string, playerToken: string, operationId: string): TurnOperationProgress {
+    const room = this.getRoom(rawCode);
+    const player = room.players.find((candidate) => candidate.token === playerToken);
+    if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    const game = room.game;
+    if (room.phase !== "playing" || !game) throw new RoomError("GAME_REQUIRED", "牌局尚未开始");
+    if (game.stage === "round_ended") throw new RoomError("ROUND_ENDED", "本局已经结束");
+    if (game.stage !== "awaiting_discard" || game.turnSeat !== player.seat) {
+      throw new RoomError("TURN_OPERATION_NOT_AVAILABLE", "当前不能执行这个回合操作");
+    }
+    const hand = game.hands.get(player.seat);
+    const melds = game.melds.get(player.seat);
+    if (!hand || !melds) throw new Error("当前玩家牌组不存在");
+    const option = findTurnOperationOptions(hand, player.seat, melds, game.lastDraw, game.wall.length).find(
+      (candidate) => candidate.id === operationId,
+    );
+    if (!option) throw new RoomError("TURN_OPERATION_INVALID", "这个操作不在当前可选范围内");
+
+    let tile: TileCode | undefined;
+    let meld: MeldView | undefined;
+    let reactionWindow: ReactionWindowDiagnostic | undefined;
+    if (option.kind === "zimo") {
+      tile = game.lastDraw?.tile.code;
+      game.pendingReaction = undefined;
+      game.lastDraw = undefined;
+      game.stage = "round_ended";
+      game.roundResult = { reason: "self_draw_hu", winnerSeats: [player.seat], tile };
+    } else if (option.kind === "angang") {
+      tile = option.tiles[0];
+      if (!tile) throw new Error("暗杠牌张不存在");
+      this.removeTilesFromHand(hand, option.tiles);
+      meld = { seat: player.seat, kind: "gang", gangType: "an", tiles: [...option.tiles], fromSeat: player.seat };
+      melds.push(meld);
+      game.lastDraw = undefined;
+      drawTileFromWallEnd(game, player.seat);
+    } else {
+      tile = option.tiles[0];
+      const [, rawMeldIndex] = option.id.split(":");
+      const meldIndex = Number(rawMeldIndex);
+      const physicalTileIndex = hand.findIndex((candidate) => candidate.code === tile);
+      if (!tile || !Number.isInteger(meldIndex) || physicalTileIndex < 0) throw new Error("加杠状态不一致");
+      const physicalTile = hand.splice(physicalTileIndex, 1)[0]!;
+      const discard = { seat: player.seat, tile };
+      const optionsBySeat = new Map<number, ReactionOption[]>();
+      for (const candidate of room.players) {
+        if (candidate.seat === player.seat) continue;
+        const candidateHand = game.hands.get(candidate.seat) ?? [];
+        const huOptions = findDiscardReactionOptions(
+          candidateHand,
+          candidate.seat,
+          discard,
+          game.melds.get(candidate.seat) ?? [],
+          game.wall.length,
+        ).filter((candidateOption) => candidateOption.kind === "hu");
+        if (huOptions.length > 0) optionsBySeat.set(candidate.seat, huOptions);
+      }
+      const autoPassedSeats = [...optionsBySeat.keys()].filter(
+        (seat) => room.players.find((candidate) => candidate.seat === seat)?.isTestPlayer,
+      );
+      const responses = new Map<number, string | "pass">(autoPassedSeats.map((seat) => [seat, "pass"]));
+      const awaitingSeats = [...optionsBySeat.keys()].filter((seat) => !responses.has(seat));
+      reactionWindow = {
+        discard,
+        eligibleSeats: [...optionsBySeat.keys()],
+        optionCount: [...optionsBySeat.values()].reduce((sum, options) => sum + options.length, 0),
+        autoPassedSeats,
+        awaitingSeats,
+        resolution: awaitingSeats.length > 0 ? "awaiting_players" : "advance_turn",
+      };
+      const addedGang = { seat: player.seat, meldIndex, tile: physicalTile };
+      game.lastDraw = undefined;
+      if (awaitingSeats.length > 0) {
+        game.pendingReaction = { discard, source: "added_gang", addedGang, optionsBySeat, responses };
+        game.stage = "awaiting_reactions";
+      } else {
+        meld = this.finalizeAddedGang(game, addedGang);
+      }
+    }
+
+    room.revision += 1;
+    return {
+      snapshot: this.snapshot(room.code),
+      diagnostics: { seat: player.seat, operation: option.kind, tile, meld, reactionWindow, wallRemaining: game.wall.length, stage: game.stage },
+    };
+  }
+
   reactToDiscard(rawCode: string, playerToken: string, operationId: string | "pass"): ReactionProgress {
     const room = this.getRoom(rawCode);
     const player = room.players.find((candidate) => candidate.token === playerToken);
@@ -273,16 +374,22 @@ export class RoomManager {
         game.lastDraw = undefined;
         game.stage = "round_ended";
         game.roundResult = {
-          reason: "discard_hu",
+          reason: pending.source === "added_gang" ? "rob_kong_hu" : "discard_hu",
           winnerSeats: winningSeats,
           fromSeat: pending.discard.seat,
           tile: pending.discard.tile,
         };
-        resolution = "discard_hu";
+        resolution = pending.source === "added_gang" ? "rob_kong_hu" : "discard_hu";
       } else if (selectedClaims.length > 0) {
+        if (pending.source !== "discard") throw new Error("加杠响应窗口只能胡牌或过牌");
         const claim = selectedClaims[0]!;
         claimedMeld = this.applyMeldClaim(game, pending.discard, claim.seat, claim.option);
         resolution = "meld_claimed";
+      } else if (pending.source === "added_gang") {
+        if (!pending.addedGang) throw new Error("待完成的加杠状态不存在");
+        game.pendingReaction = undefined;
+        claimedMeld = this.finalizeAddedGang(game, pending.addedGang);
+        resolution = "added_gang_completed";
       } else {
         game.pendingReaction = undefined;
         this.progressFromDiscard(room, pending.discard, progress, true);
@@ -355,6 +462,7 @@ export class RoomManager {
             reaction: room.game.pendingReaction
               ? {
                   discard: room.game.pendingReaction.discard,
+                  source: room.game.pendingReaction.source,
                   waitingCount: [...room.game.pendingReaction.optionsBySeat.keys()].filter(
                     (seat) => !room.game?.pendingReaction?.responses.has(seat),
                   ).length,
@@ -364,6 +472,16 @@ export class RoomManager {
             availableOperations:
               viewer && room.game.pendingReaction && !room.game.pendingReaction.responses.has(viewer.seat)
                 ? room.game.pendingReaction.optionsBySeat.get(viewer.seat)
+                : undefined,
+            availableTurnOperations:
+              viewer && room.game.stage === "awaiting_discard" && room.game.turnSeat === viewer.seat
+                ? findTurnOperationOptions(
+                    room.game.hands.get(viewer.seat) ?? [],
+                    viewer.seat,
+                    room.game.melds.get(viewer.seat) ?? [],
+                    room.game.lastDraw,
+                    room.game.wall.length,
+                  )
                 : undefined,
             roundResult: room.game.roundResult,
           }
@@ -406,7 +524,7 @@ export class RoomManager {
         });
 
         if (awaitingSeats.length > 0) {
-          game.pendingReaction = { discard, optionsBySeat, responses };
+          game.pendingReaction = { discard, source: "discard", optionsBySeat, responses };
           game.stage = "awaiting_reactions";
           game.lastDraw = undefined;
           return;
@@ -446,7 +564,13 @@ export class RoomManager {
       throw new Error("待响应弃牌与牌桌状态不一致");
     }
     game.discards.pop();
-    const meld: MeldView = { seat, kind: option.kind as MeldView["kind"], tiles: option.displayTiles, fromSeat: discard.seat };
+    const meld: MeldView = {
+      seat,
+      kind: option.kind as MeldView["kind"],
+      tiles: option.displayTiles,
+      fromSeat: discard.seat,
+      ...(option.kind === "gang" ? { gangType: "ming" as const } : {}),
+    };
     game.melds.get(seat)?.push(meld);
     game.pendingReaction = undefined;
     game.lastDraw = undefined;
@@ -454,6 +578,28 @@ export class RoomManager {
     if (option.kind === "gang") drawTileFromWallEnd(game, seat);
     else game.stage = "awaiting_discard";
     return meld;
+  }
+
+  private finalizeAddedGang(game: InitialGameState, addedGang: NonNullable<InitialGameState["pendingReaction"]>["addedGang"]): MeldView {
+    if (!addedGang) throw new Error("待完成的加杠状态不存在");
+    const meld = game.melds.get(addedGang.seat)?.[addedGang.meldIndex];
+    if (!meld || meld.kind !== "peng" || meld.tiles[0] !== addedGang.tile.code) throw new Error("原碰牌组与加杠状态不一致");
+    meld.kind = "gang";
+    meld.gangType = "jia";
+    meld.tiles = [...meld.tiles, addedGang.tile.code];
+    game.pendingReaction = undefined;
+    game.lastDraw = undefined;
+    game.turnSeat = addedGang.seat;
+    drawTileFromWallEnd(game, addedGang.seat);
+    return meld;
+  }
+
+  private removeTilesFromHand(hand: Tile[], codes: readonly TileCode[]): void {
+    for (const code of codes) {
+      const index = hand.findIndex((tile) => tile.code === code);
+      if (index < 0) throw new Error("操作所需手牌不存在");
+      hand.splice(index, 1);
+    }
   }
 
   private getRoom(rawCode: string): Room {

@@ -188,7 +188,7 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "discard-reactions-v2" ||
+  result.modelVersion !== "turn-operations-v3" ||
   result.wallRemaining !== 83 ||
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
   ![13, 14].includes(result.hostPrivateHandCount) ||

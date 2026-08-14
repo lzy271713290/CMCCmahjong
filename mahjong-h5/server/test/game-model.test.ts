@@ -2,12 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { TileCode } from "../../shared/protocol.js";
 import {
+  canWinCompleteHand,
   canWinWithDiscard,
   createFullTileSet,
   createInitialGame,
   drawTileFromWall,
   drawTileFromWallEnd,
   findDiscardReactionOptions,
+  findTurnOperationOptions,
   selectReactionClaims,
   sortTiles,
   validateInitialGame,
@@ -154,4 +156,27 @@ test("弃牌响应严格按胡杠碰吃优先且保留一炮多响", () => {
     ]).map((claim) => claim.seat),
     [1, 3],
   );
+});
+
+test("完整十四张手牌可以直接判定自摸", () => {
+  const hand = makeTiles([
+    "wan-1", "wan-2", "wan-3",
+    "tong-1", "tong-2", "tong-3",
+    "tiao-1", "tiao-2", "tiao-3",
+    "wan-9", "wan-9", "wan-9",
+    "east", "east",
+  ]);
+  assert.equal(canWinCompleteHand(hand, []), true);
+  assert.deepEqual(findTurnOperationOptions(hand, 2, [], { seat: 2, tile: hand.at(-1)! }, 20).map((option) => option.kind), ["zimo"]);
+  assert.equal(findTurnOperationOptions(hand, 2, [], { seat: 1, tile: hand.at(-1)! }, 20).some((option) => option.kind === "zimo"), false);
+});
+
+test("自回合候选包含暗杠和已有碰牌的加杠且空墙禁杠", () => {
+  const hand = makeTiles(["wan-1", "wan-1", "wan-1", "wan-1", "red", "tong-2", "tiao-3"]);
+  const melds = [{ seat: 0, kind: "peng" as const, tiles: ["red", "red", "red"] as TileCode[], fromSeat: 1 }];
+  const options = findTurnOperationOptions(hand, 0, melds, undefined, 12);
+  assert.deepEqual(options.map((option) => option.kind), ["angang", "jiagang"]);
+  assert.equal(options.find((option) => option.kind === "angang")?.id, "angang:wan-1");
+  assert.equal(options.find((option) => option.kind === "jiagang")?.id, "jiagang:0:red");
+  assert.deepEqual(findTurnOperationOptions(hand, 0, melds, undefined, 0), []);
 });

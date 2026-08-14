@@ -214,6 +214,7 @@ test("弃牌响应候选只下发给有资格的玩家且过牌后下家正常�
   assert.equal(discarded.snapshot.game?.availableOperations, undefined);
   assert.deepEqual(discarded.snapshot.game?.reaction, {
     discard: { seat: 0, tile: "wan-1" },
+    source: "discard",
     waitingCount: 1,
     respondedCount: 0,
   });
@@ -271,6 +272,7 @@ test("明杠从牌墙尾部补牌并把出牌权交给杠牌者", () => {
     kind: "gang",
     tiles: ["wan-3", "wan-3", "wan-3", "wan-3"],
     fromSeat: 1,
+    gangType: "ming",
   });
   assert.equal(rooms.snapshotForPlayer(started.roomCode, sessions[2]!.playerToken).game?.selfDrawnTile !== undefined, true);
 });
@@ -340,4 +342,173 @@ test("点炮胡响应结束本局并公开赢家、点炮者和胡牌张", () =>
     () => rooms.discardTile(started.roomCode, sessions[1]!.playerToken, "wan-1"),
     (error) => error instanceof RoomError && error.code === "ROUND_ENDED",
   );
+});
+
+function startCustomGame(factory: () => InitialGameState): { rooms: RoomManager; sessions: Session[]; started: RoomSnapshot } {
+  const rooms = new RoomManager(() => 0, factory);
+  const sessions = [rooms.createRoom("东")];
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  return { rooms, sessions, started: rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken) };
+}
+
+function createSelfDrawGame(): InitialGameState {
+  const pool = createFullTileSet();
+  const take = (code: Tile["code"]): Tile => {
+    const index = pool.findIndex((tile) => tile.code === code);
+    if (index < 0) throw new Error(`测试牌池缺少 ${code}`);
+    return pool.splice(index, 1)[0]!;
+  };
+  const dealerHand = [
+    "wan-1", "wan-2", "wan-3",
+    "tong-1", "tong-2", "tong-3",
+    "tiao-1", "tiao-2", "tiao-3",
+    "wan-9", "wan-9", "wan-9",
+    "east", "east",
+  ].map((code) => take(code as Tile["code"]));
+  const game: InitialGameState = {
+    modelVersion: GAME_MODEL_VERSION,
+    roundNumber: 1,
+    dealerSeat: 0,
+    turnSeat: 0,
+    stage: "awaiting_discard",
+    hands: new Map([[0, dealerHand], [1, pool.splice(0, 13)], [2, pool.splice(0, 13)], [3, pool.splice(0, 13)]]),
+    wall: pool,
+    discards: [],
+    melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
+  };
+  validateInitialGame(game);
+  return game;
+}
+
+test("自摸候选只下发给当前玩家并在确认后结束本局", () => {
+  const { rooms, sessions, started } = startCustomGame(createSelfDrawGame);
+  assert.deepEqual(started.game?.availableTurnOperations, undefined);
+  const dealerView = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken);
+  assert.deepEqual(dealerView.game?.availableTurnOperations?.map((option) => option.kind), ["zimo"]);
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken).game?.availableTurnOperations, undefined);
+  assert.throws(
+    () => rooms.performTurnOperation(started.roomCode, sessions[1]!.playerToken, "zimo"),
+    (error) => error instanceof RoomError && error.code === "TURN_OPERATION_NOT_AVAILABLE",
+  );
+
+  const result = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, "zimo");
+  assert.equal(result.diagnostics.operation, "zimo");
+  assert.equal(result.snapshot.game?.stage, "round_ended");
+  assert.deepEqual(result.snapshot.game?.roundResult, { reason: "self_draw_hu", winnerSeats: [0], tile: "east" });
+});
+
+function createConcealedGangGame(): InitialGameState {
+  const pool = createFullTileSet();
+  const gangTiles = pool.filter((tile) => tile.code === "wan-1");
+  for (const tile of gangTiles) pool.splice(pool.indexOf(tile), 1);
+  const dealerHand = [...gangTiles, ...pool.splice(0, 10)];
+  return {
+    modelVersion: GAME_MODEL_VERSION,
+    roundNumber: 1,
+    dealerSeat: 0,
+    turnSeat: 0,
+    stage: "awaiting_discard",
+    hands: new Map([[0, dealerHand], [1, pool.splice(0, 13)], [2, pool.splice(0, 13)], [3, pool.splice(0, 13)]]),
+    wall: pool,
+    discards: [],
+    melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
+  };
+}
+
+test("暗杠移除四张手牌、公开副露并从牌墙尾部补牌", () => {
+  const { rooms, sessions, started } = startCustomGame(createConcealedGangGame);
+  const view = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken);
+  const angang = view.game!.availableTurnOperations!.find((option) => option.kind === "angang")!;
+  const result = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, angang.id);
+
+  assert.equal(result.snapshot.game?.stage, "awaiting_discard");
+  assert.equal(result.snapshot.game?.wallRemaining, 82);
+  assert.equal(result.snapshot.game?.handTileCounts[0], 11);
+  assert.deepEqual(result.snapshot.game?.melds, [{
+    seat: 0,
+    kind: "gang",
+    gangType: "an",
+    tiles: ["wan-1", "wan-1", "wan-1", "wan-1"],
+    fromSeat: 0,
+  }]);
+  assert.ok(rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken).game?.selfDrawnTile);
+});
+
+function createAddedGangGame(): InitialGameState {
+  const pool = createFullTileSet();
+  const take = (code: Tile["code"]): Tile => {
+    const index = pool.findIndex((tile) => tile.code === code);
+    if (index < 0) throw new Error(`测试牌池缺少 ${code}`);
+    return pool.splice(index, 1)[0]!;
+  };
+  const pengTiles = [take("wan-3"), take("wan-3"), take("wan-3")];
+  const winnerHand = [
+    "wan-1", "wan-2",
+    "tong-1", "tong-2", "tong-3",
+    "tiao-1", "tiao-2", "tiao-3",
+    "wan-9", "wan-9", "wan-9",
+    "east", "east",
+  ].map((code) => take(code as Tile["code"]));
+  const dealerHand = [take("wan-3"), ...pool.splice(0, 10)];
+  return {
+    modelVersion: GAME_MODEL_VERSION,
+    roundNumber: 1,
+    dealerSeat: 0,
+    turnSeat: 0,
+    stage: "awaiting_discard",
+    hands: new Map([[0, dealerHand], [1, winnerHand], [2, pool.splice(0, 13)], [3, pool.splice(0, 13)]]),
+    wall: pool,
+    discards: [],
+    melds: new Map([
+      [0, [{ seat: 0, kind: "peng", tiles: pengTiles.map((tile) => tile.code), fromSeat: 2 }]],
+      [1, []], [2, []], [3, []],
+    ]),
+    lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
+  };
+}
+
+test("加杠先开启私有抢杠窗口，胡牌后保留原碰牌", () => {
+  const { rooms, sessions, started } = startCustomGame(createAddedGangGame);
+  const dealerView = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken);
+  const jiagang = dealerView.game!.availableTurnOperations!.find((option) => option.kind === "jiagang")!;
+  const pending = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, jiagang.id);
+
+  assert.equal(pending.snapshot.game?.stage, "awaiting_reactions");
+  assert.equal(pending.snapshot.game?.reaction?.source, "added_gang");
+  assert.equal(pending.snapshot.game?.handTileCounts[0], 10);
+  assert.equal(pending.snapshot.game?.melds[0]?.kind, "peng");
+  assert.deepEqual(rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken).game?.availableOperations?.map((option) => option.kind), ["hu"]);
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, sessions[2]!.playerToken).game?.availableOperations, undefined);
+
+  const result = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, "hu");
+  assert.equal(result.diagnostics.resolution, "rob_kong_hu");
+  assert.deepEqual(result.snapshot.game?.roundResult, { reason: "rob_kong_hu", winnerSeats: [1], fromSeat: 0, tile: "wan-3" });
+  assert.equal(result.snapshot.game?.melds[0]?.kind, "peng");
+  assert.equal(result.snapshot.game?.wallRemaining, 83);
+});
+
+test("无人抢杠时加杠升级原碰牌并从牌墙尾部补牌", () => {
+  const { rooms, sessions, started } = startCustomGame(createAddedGangGame);
+  const jiagang = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken).game!.availableTurnOperations!.find(
+    (option) => option.kind === "jiagang",
+  )!;
+  rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, jiagang.id);
+  const result = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, "pass");
+
+  assert.equal(result.diagnostics.resolution, "added_gang_completed");
+  assert.equal(result.snapshot.game?.stage, "awaiting_discard");
+  assert.equal(result.snapshot.game?.wallRemaining, 82);
+  assert.equal(result.snapshot.game?.handTileCounts[0], 11);
+  assert.deepEqual(result.snapshot.game?.melds[0], {
+    seat: 0,
+    kind: "gang",
+    gangType: "jia",
+    tiles: ["wan-3", "wan-3", "wan-3", "wan-3"],
+    fromSeat: 2,
+  });
 });

@@ -9,14 +9,21 @@ export type ReactionOption = {
   consumeTiles: TileCode[];
   displayTiles: TileCode[];
 };
+export type TurnOperationKind = "angang" | "jiagang" | "zimo";
+export type TurnOperationOption = {
+  id: string;
+  kind: TurnOperationKind;
+  tiles: TileCode[];
+};
 export type MeldView = {
   seat: number;
   kind: "chi" | "peng" | "gang";
   tiles: TileCode[];
   fromSeat: number;
+  gangType?: "ming" | "an" | "jia";
 };
 export type RoundResultView = {
-  reason: "discard_hu" | "wall_exhausted";
+  reason: "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted";
   winnerSeats: number[];
   fromSeat?: number;
   tile?: TileCode;
@@ -53,10 +60,12 @@ export type RoomSnapshot = {
     melds: MeldView[];
     reaction?: {
       discard: DiscardView;
+      source: "discard" | "added_gang";
       waitingCount: number;
       respondedCount: number;
     };
     availableOperations?: ReactionOption[];
+    availableTurnOperations?: TurnOperationOption[];
     roundResult?: RoundResultView;
   };
 };
@@ -70,6 +79,7 @@ export type ClientMessage =
   | { type: "start_game" }
   | { type: "discard_tile"; tile: TileCode }
   | { type: "react_to_discard"; operationId: string | "pass" }
+  | { type: "perform_turn_operation"; operationId: string }
   | { type: "ping" };
 
 export type ServerMessage =

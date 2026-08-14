@@ -1,4 +1,4 @@
-import type { PlayerView, ReactionOption, RoomSnapshot, ServerMessage, TileCode } from "../../shared/protocol.js";
+import type { PlayerView, ReactionOption, RoomSnapshot, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
 type TablePosition = "bottom" | "right" | "top" | "left";
@@ -132,22 +132,25 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   renderWalls(game.wallRemaining);
   renderDiscards(game.discards, viewerSeat);
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
-  renderOperations(game.availableOperations ?? []);
+  renderOperations(game.availableOperations ?? [], game.availableTurnOperations ?? []);
 
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
   if (game.stage === "round_ended") {
-    if (game.roundResult?.reason === "discard_hu") {
+    if (game.roundResult?.reason === "discard_hu" || game.roundResult?.reason === "rob_kong_hu" || game.roundResult?.reason === "self_draw_hu") {
       const winners = game.roundResult.winnerSeats
         .map((seat) => next.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`)
         .join("、");
-      turnStatus.textContent = `${winners} 胡牌`;
+      const resultLabel = game.roundResult.reason === "self_draw_hu" ? "自摸" : game.roundResult.reason === "rob_kong_hu" ? "抢杠胡" : "胡牌";
+      turnStatus.textContent = `${winners} ${resultLabel}`;
     } else {
       turnStatus.textContent = "牌墙已空 · 本局流局";
     }
   } else if (canDiscard) {
     turnStatus.textContent = "轮到你 · 请选择一张牌";
   } else if (game.stage === "awaiting_reactions") {
-    turnStatus.textContent = game.availableOperations?.length ? "请响应这张牌" : "等待其他玩家响应";
+    turnStatus.textContent = game.availableOperations?.length
+      ? game.reaction?.source === "added_gang" ? "可以抢杠胡" : "请响应这张牌"
+      : "等待其他玩家响应";
   } else {
     const current = next.players.find((player) => player.seat === game.turnSeat);
     turnStatus.textContent = `等待 ${current?.name ?? `${game.turnSeat + 1}号位`} 出牌`;
@@ -187,7 +190,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
       for (const meld of playerMelds) {
         const group = document.createElement("div");
         group.className = "meld-group";
-        group.title = meld.kind === "chi" ? "吃" : meld.kind === "peng" ? "碰" : "杠";
+        group.title = meld.kind === "chi" ? "吃" : meld.kind === "peng" ? "碰" : meld.gangType === "an" ? "暗杠" : meld.gangType === "jia" ? "加杠" : "明杠";
         for (const code of meld.tiles) group.append(createFaceTile(code, "meld", false));
         meldRack.append(group);
       }
@@ -197,10 +200,10 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
   }
 }
 
-function renderOperations(options: ReactionOption[]): void {
+function renderOperations(options: ReactionOption[], turnOptions: TurnOperationOption[]): void {
   operationPanel.replaceChildren();
-  operationPanel.classList.toggle("hidden", options.length === 0);
-  if (options.length === 0) return;
+  operationPanel.classList.toggle("hidden", options.length === 0 && turnOptions.length === 0);
+  if (options.length === 0 && turnOptions.length === 0) return;
   const labels: Record<ReactionOption["kind"], string> = { chi: "吃", peng: "碰", gang: "杠", hu: "胡" };
   for (const option of options) {
     const button = document.createElement("button");
@@ -222,18 +225,44 @@ function renderOperations(options: ReactionOption[]): void {
     button.addEventListener("click", () => submitReaction(option.id, labels[option.kind]));
     operationPanel.append(button);
   }
-  const passButton = document.createElement("button");
-  passButton.type = "button";
-  passButton.className = "operation-button operation-pass";
-  passButton.textContent = "过";
-  passButton.addEventListener("click", () => submitReaction("pass", "过"));
-  operationPanel.append(passButton);
+  if (options.length > 0) {
+    const passButton = document.createElement("button");
+    passButton.type = "button";
+    passButton.className = "operation-button operation-pass";
+    passButton.textContent = "过";
+    passButton.addEventListener("click", () => submitReaction("pass", "过"));
+    operationPanel.append(passButton);
+  }
+  const turnLabels: Record<TurnOperationOption["kind"], string> = { angang: "暗杠", jiagang: "加杠", zimo: "自摸" };
+  for (const option of turnOptions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `operation-button operation-${option.kind}${option.kind === "angang" || option.kind === "jiagang" ? " has-detail" : ""}`;
+    const label = turnLabels[option.kind];
+    if (option.kind === "zimo") button.textContent = label;
+    else {
+      const strong = document.createElement("strong");
+      strong.textContent = label;
+      const detail = document.createElement("small");
+      detail.textContent = option.tiles.map(tileLabel).join("");
+      button.append(strong, detail);
+    }
+    button.title = `${label} ${option.tiles.map(tileLabel).join(" ")}`;
+    button.addEventListener("click", () => submitTurnOperation(option.id, label));
+    operationPanel.append(button);
+  }
 }
 
 function submitReaction(operationId: string | "pass", label: string): void {
   operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
   send({ type: "react_to_discard", operationId });
   showNotice(`已选择${label}，等待结算`);
+}
+
+function submitTurnOperation(operationId: string, label: string): void {
+  operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
+  send({ type: "perform_turn_operation", operationId });
+  showNotice(`已选择${label}`);
 }
 
 function renderWalls(remaining: number): void {

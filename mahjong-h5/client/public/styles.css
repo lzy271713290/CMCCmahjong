@@ -125,7 +125,8 @@ body.in-game .shell { display: none; }
 .operation-button.has-detail { width: 78px; border-radius: 28px; }
 .operation-button.has-detail strong { font-size: 21px; line-height: 1; }
 .operation-button.has-detail small { display: block; max-width: 66px; overflow: hidden; margin-top: 2px; font-size: 8px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
-.operation-hu { border-color: #ffe3a0; background: radial-gradient(circle at 35% 28%, #ffb899, #d84b31 64%, #7e241b); color: #fff4d4; }
+.operation-hu, .operation-zimo { border-color: #ffe3a0; background: radial-gradient(circle at 35% 28%, #ffb899, #d84b31 64%, #7e241b); color: #fff4d4; }
+.operation-angang, .operation-jiagang { border-color: #bfe2ff; background: radial-gradient(circle at 35% 28%, #c9ecff, #4380a9 64%, #244d69); color: #f4fbff; }
 .operation-pass { border-color: #9ec7b9; background: radial-gradient(circle at 35% 28%, #d2e5df, #6b9487 64%, #304f47); color: #173a31; }
 
 .self-area { position: absolute; z-index: 25; right: 3.5%; bottom: max(1.8%, env(safe-area-inset-bottom)); left: 15%; display: flex; justify-content: center; }

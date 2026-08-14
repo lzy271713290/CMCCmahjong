@@ -7,9 +7,10 @@ import type {
   ReactionOption,
   RoundResultView,
   TileCode,
+  TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "discard-reactions-v2";
+export const GAME_MODEL_VERSION = "turn-operations-v3";
 
 export type Tile = {
   code: TileCode;
@@ -29,6 +30,8 @@ export type InitialGameState = {
   lastDraw?: { seat: number; tile: Tile };
   pendingReaction?: {
     discard: DiscardView;
+    source: "discard" | "added_gang";
+    addedGang?: { seat: number; meldIndex: number; tile: Tile };
     optionsBySeat: Map<number, ReactionOption[]>;
     responses: Map<number, string | "pass">;
   };
@@ -192,6 +195,32 @@ export function findDiscardReactionOptions(
   return options;
 }
 
+export function findTurnOperationOptions(
+  hand: readonly Tile[],
+  seat: number,
+  melds: readonly MeldView[],
+  lastDraw: InitialGameState["lastDraw"],
+  wallRemaining: number,
+): TurnOperationOption[] {
+  const options: TurnOperationOption[] = [];
+  if (lastDraw?.seat === seat && canWinCompleteHand(hand, melds)) {
+    options.push({ id: "zimo", kind: "zimo", tiles: [lastDraw.tile.code] });
+  }
+  if (wallRemaining <= 0) return options;
+
+  const counts = countCodes(hand.map((tile) => tile.code));
+  for (const [code, count] of counts) {
+    if (count === 4) options.push({ id: `angang:${code}`, kind: "angang", tiles: [code, code, code, code] });
+  }
+  melds.forEach((meld, meldIndex) => {
+    const code = meld.tiles[0];
+    if (meld.kind === "peng" && code && (counts.get(code) ?? 0) > 0) {
+      options.push({ id: `jiagang:${meldIndex}:${code}`, kind: "jiagang", tiles: [code] });
+    }
+  });
+  return options;
+}
+
 export type ReactionClaim = { seat: number; option: ReactionOption };
 
 export function selectReactionClaims(claims: readonly ReactionClaim[]): ReactionClaim[] {
@@ -203,7 +232,14 @@ export function selectReactionClaims(claims: readonly ReactionClaim[]): Reaction
 }
 
 export function canWinWithDiscard(hand: readonly Tile[], incoming: TileCode, melds: readonly MeldView[]): boolean {
-  const concealedCodes = hand.map((tile) => tile.code).concat(incoming);
+  return canWinCodes(hand.map((tile) => tile.code).concat(incoming), melds);
+}
+
+export function canWinCompleteHand(hand: readonly Tile[], melds: readonly MeldView[]): boolean {
+  return canWinCodes(hand.map((tile) => tile.code), melds);
+}
+
+function canWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[]): boolean {
   const allCodes = concealedCodes.concat(melds.flatMap((meld) => meld.tiles));
   if (!NUMBERED_SUITS.every((suit) => allCodes.some((code) => code.startsWith(`${suit}-`)))) return false;
 

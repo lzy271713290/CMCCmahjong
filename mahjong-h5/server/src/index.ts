@@ -230,6 +230,55 @@ webSockets.on("connection", (socket) => {
           });
           break;
         }
+        case "perform_turn_operation": {
+          const session = requireSession(socket);
+          const result = manager.performTurnOperation(session.roomCode, session.playerToken, message.operationId);
+          const { snapshot, diagnostics } = result;
+          broadcast(session.roomCode);
+          logInfo("turn_operation_performed", {
+            connectionId,
+            roomCode: session.roomCode,
+            seat: diagnostics.seat,
+            operation: diagnostics.operation,
+            tile: diagnostics.tile,
+            wallRemaining: diagnostics.wallRemaining,
+            stage: diagnostics.stage,
+            revision: snapshot.revision,
+          });
+          if (diagnostics.reactionWindow) {
+            logInfo("rob_kong_options_calculated", {
+              connectionId,
+              roomCode: session.roomCode,
+              gangSeat: diagnostics.seat,
+              eligibleSeatCount: diagnostics.reactionWindow.eligibleSeats.length,
+              autoPassedCount: diagnostics.reactionWindow.autoPassedSeats.length,
+              awaitingResponseCount: diagnostics.reactionWindow.awaitingSeats.length,
+              resolution: diagnostics.reactionWindow.resolution,
+              revision: snapshot.revision,
+            });
+          }
+          if (diagnostics.meld) {
+            logInfo("kong_completed", {
+              connectionId,
+              roomCode: session.roomCode,
+              seat: diagnostics.meld.seat,
+              gangType: diagnostics.meld.gangType,
+              wallRemaining: diagnostics.wallRemaining,
+              revision: snapshot.revision,
+            });
+          }
+          if (diagnostics.operation === "zimo") {
+            logInfo("round_ended", {
+              connectionId,
+              roomCode: session.roomCode,
+              reason: "self_draw_hu",
+              winnerSeats: String(diagnostics.seat),
+              winnerCount: 1,
+              revision: snapshot.revision,
+            });
+          }
+          break;
+        }
         case "react_to_discard": {
           const session = requireSession(socket);
           const result = manager.reactToDiscard(session.roomCode, session.playerToken, message.operationId);
@@ -280,16 +329,17 @@ webSockets.on("connection", (socket) => {
               roomCode: session.roomCode,
               seat: diagnostics.claimedMeld.seat,
               meldKind: diagnostics.claimedMeld.kind,
+              gangType: diagnostics.claimedMeld.gangType,
               fromSeat: diagnostics.claimedMeld.fromSeat,
               wallRemaining: diagnostics.wallRemaining,
               revision: snapshot.revision,
             });
           }
-          if (diagnostics.resolution === "discard_hu") {
+          if (diagnostics.resolution === "discard_hu" || diagnostics.resolution === "rob_kong_hu") {
             logInfo("round_ended", {
               connectionId,
               roomCode: session.roomCode,
-              reason: "discard_hu",
+              reason: diagnostics.resolution,
               winnerSeats: diagnostics.winningSeats.join(","),
               winnerCount: diagnostics.winningSeats.length,
               revision: snapshot.revision,
