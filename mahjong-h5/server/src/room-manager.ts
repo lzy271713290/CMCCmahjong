@@ -1,6 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto";
-import type { RoomSnapshot } from "../../shared/protocol.js";
-import { createInitialGame, type InitialGameState } from "./game-model.js";
+import type { RoomSnapshot, TileCode } from "../../shared/protocol.js";
+import { createInitialGame, sortTiles, type InitialGameState } from "./game-model.js";
 
 type Player = {
   id: string;
@@ -131,7 +131,9 @@ export class RoomManager {
     if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始");
     if (room.players.length !== 4) throw new RoomError("PLAYERS_REQUIRED", "需要四名玩家才能开始");
     if (!room.players.every((player) => player.ready)) throw new RoomError("READY_REQUIRED", "需要所有玩家准备后才能开始");
-    const dealerSeat = room.players[randomInt(0, room.players.length)]!.seat;
+    const hasTestPlayers = room.players.some((player) => player.isTestPlayer);
+    const dealerCandidates = hasTestPlayers ? room.players.filter((player) => !player.isTestPlayer) : room.players;
+    const dealerSeat = dealerCandidates[randomInt(0, dealerCandidates.length)]!.seat;
     room.game = createInitialGame(
       room.players.map((player) => player.seat),
       dealerSeat,
@@ -141,8 +143,37 @@ export class RoomManager {
     return this.snapshot(room.code);
   }
 
+  discardTile(rawCode: string, playerToken: string, tileCode: TileCode): RoomSnapshot {
+    const room = this.getRoom(rawCode);
+    const player = room.players.find((candidate) => candidate.token === playerToken);
+    if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    if (room.phase !== "playing" || !room.game) throw new RoomError("GAME_REQUIRED", "牌局尚未开始");
+    if (room.game.stage !== "awaiting_discard") throw new RoomError("REACTIONS_PENDING", "请等待其他玩家响应当前弃牌");
+    if (room.game.turnSeat !== player.seat) throw new RoomError("TURN_REQUIRED", "还没有轮到你出牌");
+    const hand = room.game.hands.get(player.seat);
+    const tileIndex = hand?.findIndex((tile) => tile.code === tileCode) ?? -1;
+    if (!hand || tileIndex < 0) throw new RoomError("TILE_NOT_IN_HAND", "你的手牌中没有这张牌");
+
+    hand.splice(tileIndex, 1);
+    room.game.discards.push({ seat: player.seat, tile: tileCode });
+    room.game.stage = "awaiting_reactions";
+    room.revision += 1;
+    return this.snapshot(room.code);
+  }
+
   snapshot(rawCode: string): RoomSnapshot {
     const room = this.getRoom(rawCode);
+    return this.buildSnapshot(room);
+  }
+
+  snapshotForPlayer(rawCode: string, playerToken: string): RoomSnapshot {
+    const room = this.getRoom(rawCode);
+    const viewer = room.players.find((player) => player.token === playerToken);
+    if (!viewer) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    return this.buildSnapshot(room, viewer);
+  }
+
+  private buildSnapshot(room: Room, viewer?: Player): RoomSnapshot {
     return {
       roomCode: room.code,
       revision: room.revision,
@@ -163,8 +194,13 @@ export class RoomManager {
             modelVersion: room.game.modelVersion,
             roundNumber: room.game.roundNumber,
             dealerSeat: room.game.dealerSeat,
+            turnSeat: room.game.turnSeat,
+            stage: room.game.stage,
             wallRemaining: room.game.wall.length,
             handTileCounts: [0, 1, 2, 3].map((seat) => room.game?.hands.get(seat)?.length ?? 0),
+            viewerSeat: viewer?.seat,
+            selfHand: viewer ? sortTiles(room.game.hands.get(viewer.seat) ?? []).map((tile) => tile.code) : undefined,
+            latestDiscard: room.game.discards.at(-1),
           }
         : undefined,
     };
@@ -182,7 +218,7 @@ export class RoomManager {
       roomCode: room.code,
       playerId: player.id,
       playerToken: player.token,
-      snapshot: this.snapshot(room.code),
+      snapshot: this.snapshotForPlayer(room.code, player.token),
     };
   }
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createFullTileSet, createInitialGame, validateInitialGame } from "../src/game-model.js";
+import { createFullTileSet, createInitialGame, sortTiles, validateInitialGame } from "../src/game-model.js";
 
 test("完整牌组包含34种牌且每种4张", () => {
   const tiles = createFullTileSet();
@@ -9,6 +9,17 @@ test("完整牌组包含34种牌且每种4张", () => {
   assert.equal(tiles.length, 136);
   assert.equal(counts.size, 34);
   assert.equal([...counts.values()].every((count) => count === 4), true);
+});
+
+test("起手牌按万筒条和字牌稳定排序", () => {
+  const sorted = sortTiles([
+    { code: "white", copy: 0 },
+    { code: "tiao-1", copy: 0 },
+    { code: "wan-9", copy: 0 },
+    { code: "wan-1", copy: 0 },
+    { code: "tong-2", copy: 0 },
+  ]);
+  assert.deepEqual(sorted.map((tile) => tile.code), ["wan-1", "wan-9", "tong-2", "tiao-1", "white"]);
 });
 
 test("最小开局模型满足四人发牌和牌张守恒", () => {

@@ -40,9 +40,10 @@ function send(socket: WebSocket, message: ServerMessage): void {
 }
 
 function broadcast(roomCode: string): void {
-  const snapshot = manager.snapshot(roomCode);
   for (const [socket, session] of sessionsBySocket) {
-    if (session.roomCode === roomCode) send(socket, { type: "snapshot", snapshot });
+    if (session.roomCode === roomCode) {
+      send(socket, { type: "snapshot", snapshot: manager.snapshotForPlayer(roomCode, session.playerToken) });
+    }
   }
 }
 
@@ -61,6 +62,16 @@ function bindSession(socket: WebSocket, session: Session, connectionId: string, 
     revision: session.snapshot.revision,
     phase: session.snapshot.phase,
   });
+  if (event === "room_reconnected" && session.snapshot.game?.selfHand) {
+    logInfo("private_hand_restored", {
+      connectionId,
+      roomCode: session.roomCode,
+      playerId: shortId(session.playerId),
+      seat: session.snapshot.game.viewerSeat,
+      handTileCount: session.snapshot.game.selfHand.length,
+      roundNumber: session.snapshot.game.roundNumber,
+    });
+  }
 }
 
 function requireSession(socket: WebSocket): { roomCode: string; playerToken: string } {
@@ -120,13 +131,39 @@ webSockets.on("connection", (socket) => {
             modelVersion: snapshot.game?.modelVersion,
             roundNumber: snapshot.game?.roundNumber,
             dealerSeat: snapshot.game?.dealerSeat,
+            turnSeat: snapshot.game?.turnSeat,
+            stage: snapshot.game?.stage,
             wallRemaining: snapshot.game?.wallRemaining,
             handTileCounts: snapshot.game?.handTileCounts.join(","),
             totalTiles: (snapshot.game?.wallRemaining ?? 0) + (snapshot.game?.handTileCounts.reduce((sum, count) => sum + count, 0) ?? 0),
             playerCount: snapshot.players.length,
             revision: snapshot.revision,
           });
+          logInfo("private_hands_distributed", {
+            connectionId,
+            roomCode: session.roomCode,
+            recipientCount: snapshot.players.length,
+            handTileCounts: snapshot.game?.handTileCounts.join(","),
+            privacyMode: "self_hand_only",
+            revision: snapshot.revision,
+          });
           logInfo("game_started", { connectionId, roomCode: session.roomCode, playerCount: snapshot.players.length, revision: snapshot.revision });
+          break;
+        }
+        case "discard_tile": {
+          const session = requireSession(socket);
+          const snapshot = manager.discardTile(session.roomCode, session.playerToken, message.tile);
+          broadcast(session.roomCode);
+          logInfo("tile_discarded", {
+            connectionId,
+            roomCode: session.roomCode,
+            seat: snapshot.game?.latestDiscard?.seat,
+            tile: snapshot.game?.latestDiscard?.tile,
+            handTileCount: snapshot.game?.latestDiscard ? snapshot.game.handTileCounts[snapshot.game.latestDiscard.seat] : undefined,
+            wallRemaining: snapshot.game?.wallRemaining,
+            nextStage: snapshot.game?.stage,
+            revision: snapshot.revision,
+          });
           break;
         }
         case "ping":

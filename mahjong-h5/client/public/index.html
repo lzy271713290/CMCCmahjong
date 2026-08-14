@@ -29,7 +29,13 @@
         <button id="fill-test" class="test-button">一键补齐测试玩家</button>
         <button id="start" class="primary hidden">开始游戏</button>
         <div id="game-status" class="game-status hidden"><strong>最小牌局模型已启动</strong><span id="game-summary">正在读取牌局摘要</span></div>
-        <p class="hint">这是第一步联机样板：已支持开房、加入、状态同步和掉线恢复；麻将牌桌随后接入。</p>
+        <div id="game-table" class="game-table hidden">
+          <div class="table-core"><span id="turn-status">等待牌局状态</span><strong id="wall-status">牌墙 --</strong></div>
+          <div id="latest-discard" class="latest-discard"><span>弃牌区</span><div class="discard-placeholder">暂无弃牌</div></div>
+          <div class="hand-heading"><strong>我的起手牌</strong><span>仅自己可见</span></div>
+          <div id="self-hand" class="self-hand" aria-label="我的起手牌"></div>
+        </div>
+        <p class="hint">已支持私有起手牌和庄家首次出牌；当前弃牌后停在响应等待阶段，下一步接入过、吃、碰、杠、胡。</p>
       </section>
       <p id="notice" class="notice" aria-live="polite"></p>
     </main>

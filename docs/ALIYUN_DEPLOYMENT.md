@@ -58,7 +58,7 @@ pnpm install --frozen-lockfile
 pnpm test
 ```
 
-八项自动测试全部通过后，启动服务：
+十二项自动测试全部通过后，启动服务：
 
 ```bash
 cd /opt/CMCCmahjong/mahjong-h5
@@ -191,7 +191,13 @@ grep -E '"event":"(server_started|room_created|room_joined|room_reconnected)"' l
 grep '"event":"game_model_initialized"' logs/server.jsonl | tail -n 20
 ```
 
-正常 JSON 日志应包含 `"modelVersion":"minimal-v1"`、`"wallRemaining":83` 和 `"totalTiles":136`；`handTileCounts` 中应恰好一家14张、三家13张。日志不会记录具体手牌。
+正常 JSON 日志应包含 `"modelVersion":"private-hands-v1"`、`"wallRemaining":83` 和 `"totalTiles":136`；`handTileCounts` 中应恰好一家14张、三家13张。日志不会记录具体手牌。
+
+验证私有发牌、重连恢复和首次出牌监控事件：
+
+```bash
+grep -E '"event":"(private_hands_distributed|private_hand_restored|tile_discarded)"' logs/server.jsonl | tail -n 30
+```
 
 从开发电脑对公网服务执行完整 WebSocket 冒烟测试：
 

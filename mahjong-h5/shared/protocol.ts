@@ -1,3 +1,8 @@
+export type NumberedSuit = "wan" | "tong" | "tiao";
+export type HonorTile = "east" | "south" | "west" | "north" | "red" | "green" | "white";
+export type TileCode = `${NumberedSuit}-${number}` | HonorTile;
+export type DiscardView = { seat: number; tile: TileCode };
+
 export type PlayerView = {
   id: string;
   name: string;
@@ -17,8 +22,13 @@ export type RoomSnapshot = {
     modelVersion: string;
     roundNumber: number;
     dealerSeat: number;
+    turnSeat: number;
+    stage: "awaiting_discard" | "awaiting_reactions";
     wallRemaining: number;
     handTileCounts: number[];
+    viewerSeat?: number;
+    selfHand?: TileCode[];
+    latestDiscard?: DiscardView;
   };
 };
 
@@ -29,6 +39,7 @@ export type ClientMessage =
   | { type: "set_ready"; ready: boolean }
   | { type: "fill_test_players" }
   | { type: "start_game" }
+  | { type: "discard_tile"; tile: TileCode }
   | { type: "ping" };
 
 export type ServerMessage =

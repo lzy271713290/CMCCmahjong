@@ -1,10 +1,7 @@
 import { randomInt } from "node:crypto";
+import type { DiscardView, HonorTile, NumberedSuit, TileCode } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "minimal-v1";
-
-export type NumberedSuit = "wan" | "tong" | "tiao";
-export type HonorTile = "east" | "south" | "west" | "north" | "red" | "green" | "white";
-export type TileCode = `${NumberedSuit}-${number}` | HonorTile;
+export const GAME_MODEL_VERSION = "private-hands-v1";
 
 export type Tile = {
   code: TileCode;
@@ -15,12 +12,20 @@ export type InitialGameState = {
   modelVersion: typeof GAME_MODEL_VERSION;
   roundNumber: 1;
   dealerSeat: number;
+  turnSeat: number;
+  stage: "awaiting_discard" | "awaiting_reactions";
   hands: Map<number, Tile[]>;
   wall: Tile[];
+  discards: DiscardView[];
 };
 
 const NUMBERED_SUITS: NumberedSuit[] = ["wan", "tong", "tiao"];
 const HONOR_TILES: HonorTile[] = ["east", "south", "west", "north", "red", "green", "white"];
+const TILE_ORDER = new Map<TileCode, number>(
+  [...NUMBERED_SUITS.flatMap((suit) => Array.from({ length: 9 }, (_, index) => `${suit}-${index + 1}` as TileCode)), ...HONOR_TILES].map(
+    (code, index) => [code, index],
+  ),
+);
 
 export function createFullTileSet(): Tile[] {
   const codes: TileCode[] = [];
@@ -39,6 +44,13 @@ export function shuffleTiles(tiles: readonly Tile[], randomIndex: (maxExclusive:
     [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex]!, shuffled[index]!];
   }
   return shuffled;
+}
+
+export function sortTiles(tiles: readonly Tile[]): Tile[] {
+  return [...tiles].sort((left, right) => {
+    const codeDifference = (TILE_ORDER.get(left.code) ?? 999) - (TILE_ORDER.get(right.code) ?? 999);
+    return codeDifference || left.copy - right.copy;
+  });
 }
 
 export function createInitialGame(
@@ -73,8 +85,11 @@ export function createInitialGame(
     modelVersion: GAME_MODEL_VERSION,
     roundNumber: 1,
     dealerSeat,
+    turnSeat: dealerSeat,
+    stage: "awaiting_discard",
     hands,
     wall,
+    discards: [],
   };
   validateInitialGame(game);
   return game;

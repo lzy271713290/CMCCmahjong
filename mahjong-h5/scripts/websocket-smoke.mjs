@@ -34,7 +34,7 @@ second.send(JSON.stringify({ type: "join_room", roomCode: created.roomCode, name
 const joined = await joinedWait;
 const twoPlayers = await twoPlayersWait;
 
-const offlineWait = next(first, "snapshot");
+const offlineWait = next(first, "snapshot", (message) => message.snapshot.players.find((player) => player.id === joined.playerId)?.connected === false);
 second.close();
 const offline = await offlineWait;
 
@@ -43,44 +43,92 @@ const restoredWait = next(restoredSocket, "session");
 restoredSocket.send(JSON.stringify({ type: "reconnect", roomCode: created.roomCode, playerToken: joined.playerToken }));
 const restored = await restoredWait;
 
-const secondReadyWait = next(first, "snapshot", (message) => message.snapshot.players.find((player) => player.id === joined.playerId)?.ready === true);
-restoredSocket.send(JSON.stringify({ type: "set_ready", ready: true }));
-await secondReadyWait;
+const thirdSocket = await open();
+const threePlayersWait = next(first, "snapshot", (message) => message.snapshot.players.length === 3);
+const thirdJoinedWait = next(thirdSocket, "session");
+thirdSocket.send(JSON.stringify({ type: "join_room", roomCode: created.roomCode, name: "丙" }));
+const thirdJoined = await thirdJoinedWait;
+await threePlayersWait;
 
-const filledWait = next(first, "snapshot", (message) => message.snapshot.players.length === 4);
-first.send(JSON.stringify({ type: "fill_test_players" }));
-await filledWait;
+const fourthSocket = await open();
+const fourPlayersWait = next(first, "snapshot", (message) => message.snapshot.players.length === 4);
+const fourthJoinedWait = next(fourthSocket, "session");
+fourthSocket.send(JSON.stringify({ type: "join_room", roomCode: created.roomCode, name: "丁" }));
+const fourthJoined = await fourthJoinedWait;
+await fourPlayersWait;
 
-const hostReadyWait = next(first, "snapshot", (message) => message.snapshot.players.find((player) => player.id === created.playerId)?.ready === true);
-first.send(JSON.stringify({ type: "set_ready", ready: true }));
-await hostReadyWait;
+const connections = [
+  { socket: first, session: created },
+  { socket: restoredSocket, session: restored },
+  { socket: thirdSocket, session: thirdJoined },
+  { socket: fourthSocket, session: fourthJoined },
+];
+for (const connection of connections) {
+  const readyWait = next(first, "snapshot", (message) => message.snapshot.players.find((player) => player.id === connection.session.playerId)?.ready === true);
+  connection.socket.send(JSON.stringify({ type: "set_ready", ready: true }));
+  await readyWait;
+}
 
-const gameStartedWait = next(first, "snapshot", (message) => message.snapshot.phase === "playing");
+const gameStartedWaits = connections.map((connection) => next(connection.socket, "snapshot", (message) => message.snapshot.phase === "playing"));
 first.send(JSON.stringify({ type: "start_game" }));
-const gameStarted = await gameStartedWait;
+const gameStartedMessages = await Promise.all(gameStartedWaits);
+const gameStarted = gameStartedMessages[0];
+const dealerSeat = gameStarted.snapshot.game?.dealerSeat;
+const dealerIndex = connections.findIndex((connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === dealerSeat);
+const dealerTile = gameStartedMessages[dealerIndex]?.snapshot.game?.selfHand?.[0];
+const discardWaits = connections.map((connection) => next(connection.socket, "snapshot", (message) => message.snapshot.game?.stage === "awaiting_reactions"));
+connections[dealerIndex]?.socket.send(JSON.stringify({ type: "discard_tile", tile: dealerTile }));
+const discardedMessages = await Promise.all(discardWaits);
+const dealerAfterDiscard = discardedMessages[dealerIndex];
+const originalPlayingHand = discardedMessages[1].snapshot.game?.selfHand;
+
+const playingOfflineWait = next(first, "snapshot", (message) => message.snapshot.players.find((player) => player.id === joined.playerId)?.connected === false);
+restoredSocket.close();
+await playingOfflineWait;
+
+const playingRestoredSocket = await open();
+const playingRestoredWait = next(playingRestoredSocket, "session");
+playingRestoredSocket.send(JSON.stringify({ type: "reconnect", roomCode: created.roomCode, playerToken: joined.playerToken }));
+const playingRestored = await playingRestoredWait;
 
 const result = {
   serverUrl,
   roomCodeLength: created.roomCode.length,
   playerCount: twoPlayers.snapshot.players.length,
+  fourPlayerCount: gameStarted.snapshot.players.length,
   disconnectObserved: offline.snapshot.players.find((player) => player.id === joined.playerId)?.connected === false,
   originalSeatRestored: restored.playerId === joined.playerId,
   gamePhase: gameStarted.snapshot.phase,
   wallRemaining: gameStarted.snapshot.game?.wallRemaining,
   handTileCounts: gameStarted.snapshot.game?.handTileCounts,
+  hostPrivateHandCount: gameStarted.snapshot.game?.selfHand?.length,
+  secondPrivateHandCount: gameStartedMessages[1].snapshot.game?.selfHand?.length,
+  discardStage: dealerAfterDiscard.snapshot.game?.stage,
+  discardedTile: dealerAfterDiscard.snapshot.game?.latestDiscard?.tile,
+  dealerHandAfterDiscard: dealerAfterDiscard.snapshot.game?.selfHand?.length,
+  playingHandRestored: JSON.stringify(playingRestored.snapshot.game?.selfHand) === JSON.stringify(originalPlayingHand),
 };
 console.log(JSON.stringify(result));
 first.close();
-restoredSocket.close();
+playingRestoredSocket.close();
+thirdSocket.close();
+fourthSocket.close();
 
 if (
   result.roomCodeLength !== 6 ||
   result.playerCount !== 2 ||
+  result.fourPlayerCount !== 4 ||
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
   result.wallRemaining !== 83 ||
-  result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53
+  result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
+  ![13, 14].includes(result.hostPrivateHandCount) ||
+  ![13, 14].includes(result.secondPrivateHandCount) ||
+  result.discardStage !== "awaiting_reactions" ||
+  result.discardedTile !== dealerTile ||
+  result.dealerHandAfterDiscard !== 13 ||
+  !result.playingHandRestored
 ) {
   process.exitCode = 1;
 }
