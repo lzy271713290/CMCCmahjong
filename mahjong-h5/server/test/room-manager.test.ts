@@ -48,6 +48,9 @@ test("四人全部准备后房主可以开始游戏", () => {
   rooms.setReady(host.roomCode, host.playerToken, true);
   const snapshot = rooms.startGame(host.roomCode, host.playerToken);
   assert.equal(snapshot.phase, "playing");
+  assert.equal(snapshot.game?.wallRemaining, 83);
+  assert.equal(snapshot.game?.handTileCounts.reduce((sum, count) => sum + count, 0), 53);
+  assert.equal(snapshot.game?.handTileCounts.filter((count) => count === 14).length, 1);
 });
 
 test("有人未准备时不能开始游戏", () => {

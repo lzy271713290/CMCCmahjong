@@ -1,5 +1,6 @@
 import { randomInt, randomUUID } from "node:crypto";
 import type { RoomSnapshot } from "../../shared/protocol.js";
+import { createInitialGame, type InitialGameState } from "./game-model.js";
 
 type Player = {
   id: string;
@@ -17,6 +18,7 @@ type Room = {
   phase: "waiting" | "playing";
   hostPlayerId: string;
   players: Player[];
+  game?: InitialGameState;
 };
 
 export type Session = {
@@ -129,6 +131,11 @@ export class RoomManager {
     if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始");
     if (room.players.length !== 4) throw new RoomError("PLAYERS_REQUIRED", "需要四名玩家才能开始");
     if (!room.players.every((player) => player.ready)) throw new RoomError("READY_REQUIRED", "需要所有玩家准备后才能开始");
+    const dealerSeat = room.players[randomInt(0, room.players.length)]!.seat;
+    room.game = createInitialGame(
+      room.players.map((player) => player.seat),
+      dealerSeat,
+    );
     room.phase = "playing";
     room.revision += 1;
     return this.snapshot(room.code);
@@ -151,6 +158,15 @@ export class RoomManager {
           isHost: player.id === room.hostPlayerId,
           isTestPlayer: player.isTestPlayer,
         })),
+      game: room.game
+        ? {
+            modelVersion: room.game.modelVersion,
+            roundNumber: room.game.roundNumber,
+            dealerSeat: room.game.dealerSeat,
+            wallRemaining: room.game.wall.length,
+            handTileCounts: [0, 1, 2, 3].map((seat) => room.game?.hands.get(seat)?.length ?? 0),
+          }
+        : undefined,
     };
   }
 

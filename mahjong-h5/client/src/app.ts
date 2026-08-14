@@ -12,6 +12,7 @@ const readyButton = required<HTMLButtonElement>("ready");
 const fillTestButton = required<HTMLButtonElement>("fill-test");
 const startButton = required<HTMLButtonElement>("start");
 const gameStatus = required<HTMLElement>("game-status");
+const gameSummary = required<HTMLElement>("game-summary");
 const copyButton = required<HTMLButtonElement>("copy");
 const currentCode = required<HTMLElement>("current-code");
 const seats = required<HTMLElement>("seats");
@@ -97,6 +98,9 @@ function render(next: RoomSnapshot): void {
   fillTestButton.classList.toggle("hidden", isPlaying || !me?.isHost || next.players.length >= 4);
   startButton.classList.toggle("hidden", isPlaying || !canStart);
   gameStatus.classList.toggle("hidden", !isPlaying);
+  if (next.game) {
+    gameSummary.textContent = `第${next.game.roundNumber}局 · ${next.game.dealerSeat + 1}号位庄家 · 手牌 ${next.game.handTileCounts.join("/")} · 牌墙剩余${next.game.wallRemaining}张`;
+  }
 }
 
 function showLobby(): void {

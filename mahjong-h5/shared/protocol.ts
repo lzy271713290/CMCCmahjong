@@ -13,6 +13,13 @@ export type RoomSnapshot = {
   revision: number;
   phase: "waiting" | "playing";
   players: PlayerView[];
+  game?: {
+    modelVersion: string;
+    roundNumber: number;
+    dealerSeat: number;
+    wallRemaining: number;
+    handTileCounts: number[];
+  };
 };
 
 export type ClientMessage =

@@ -114,6 +114,18 @@ webSockets.on("connection", (socket) => {
           const session = requireSession(socket);
           const snapshot = manager.startGame(session.roomCode, session.playerToken);
           broadcast(session.roomCode);
+          logInfo("game_model_initialized", {
+            connectionId,
+            roomCode: session.roomCode,
+            modelVersion: snapshot.game?.modelVersion,
+            roundNumber: snapshot.game?.roundNumber,
+            dealerSeat: snapshot.game?.dealerSeat,
+            wallRemaining: snapshot.game?.wallRemaining,
+            handTileCounts: snapshot.game?.handTileCounts.join(","),
+            totalTiles: (snapshot.game?.wallRemaining ?? 0) + (snapshot.game?.handTileCounts.reduce((sum, count) => sum + count, 0) ?? 0),
+            playerCount: snapshot.players.length,
+            revision: snapshot.revision,
+          });
           logInfo("game_started", { connectionId, roomCode: session.roomCode, playerCount: snapshot.players.length, revision: snapshot.revision });
           break;
         }

@@ -58,7 +58,7 @@ pnpm install --frozen-lockfile
 pnpm test
 ```
 
-六项自动测试全部通过后，启动服务：
+八项自动测试全部通过后，启动服务：
 
 ```bash
 cd /opt/CMCCmahjong/mahjong-h5
@@ -184,5 +184,13 @@ grep '"event":"request_failed"' logs/server.jsonl | tail -n 50
 ```bash
 grep -E '"event":"(server_started|room_created|room_joined|room_reconnected)"' logs/server.jsonl | tail -n 100
 ```
+
+验证最小牌局模型是否成功初始化：
+
+```bash
+grep '"event":"game_model_initialized"' logs/server.jsonl | tail -n 20
+```
+
+正常 JSON 日志应包含 `"modelVersion":"minimal-v1"`、`"wallRemaining":83` 和 `"totalTiles":136`；`handTileCounts` 中应恰好一家14张、三家13张。日志不会记录具体手牌。
 
 日志包含服务实例 ID、进程 PID、房间号、人数、操作和错误码，不记录玩家身份令牌。把相关行复制出来即可协助定位“服务是否重启”“请求是否进入同一实例”“房间为何不存在”等问题。
