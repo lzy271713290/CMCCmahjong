@@ -311,6 +311,19 @@ function renderScoreSummary(next: RoomSnapshot): void {
       .join(" · ");
     scoreSummary.append(detail);
   }
+
+  const me = next.players.find((player) => player.id === saved?.playerId);
+  if (me?.isHost) {
+    const nextRound = document.createElement("button");
+    nextRound.type = "button";
+    nextRound.className = "next-round-button";
+    nextRound.textContent = "开始下一局";
+    nextRound.addEventListener("click", () => {
+      nextRound.disabled = true;
+      send({ type: "start_next_round" });
+    });
+    scoreSummary.append(nextRound);
+  }
 }
 
 function renderWalls(remaining: number): void {

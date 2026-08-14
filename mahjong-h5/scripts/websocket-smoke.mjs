@@ -106,6 +106,9 @@ const gameStartedWaits = connections.map((connection) => next(connection.socket,
 first.send(JSON.stringify({ type: "start_game" }));
 const gameStartedMessages = await Promise.all(gameStartedWaits);
 const gameStarted = gameStartedMessages[0];
+const earlyNextRoundWait = next(first, "error", (message) => message.code === "ROUND_ACTIVE");
+first.send(JSON.stringify({ type: "start_next_round" }));
+const earlyNextRoundError = await earlyNextRoundWait;
 const dealerSeat = gameStarted.snapshot.game?.dealerSeat;
 const dealerIndex = connections.findIndex((connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === dealerSeat);
 const dealerTile = chooseSafeDiscard(gameStartedMessages, dealerIndex);
@@ -159,6 +162,7 @@ const result = {
   originalSeatRestored: restored.playerId === joined.playerId,
   gamePhase: gameStarted.snapshot.phase,
   modelVersion: gameStarted.snapshot.game?.modelVersion,
+  earlyNextRoundRejected: earlyNextRoundError.code === "ROUND_ACTIVE",
   wallRemaining: gameStarted.snapshot.game?.wallRemaining,
   handTileCounts: gameStarted.snapshot.game?.handTileCounts,
   hostPrivateHandCount: gameStarted.snapshot.game?.selfHand?.length,
@@ -188,7 +192,8 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "scoring-ledger-v5" ||
+  result.modelVersion !== "round-loop-v6" ||
+  !result.earlyNextRoundRejected ||
   result.wallRemaining !== 83 ||
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
   ![13, 14].includes(result.hostPrivateHandCount) ||

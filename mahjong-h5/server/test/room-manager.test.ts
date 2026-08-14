@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { RoomSnapshot } from "../../shared/protocol.js";
-import { GAME_MODEL_VERSION, createFullTileSet, validateInitialGame, type InitialGameState, type Tile } from "../src/game-model.js";
+import { GAME_MODEL_VERSION, createFullTileSet, createInitialGame, validateInitialGame, type InitialGameState, type Tile } from "../src/game-model.js";
 import { RoomError, RoomManager, type Session } from "../src/room-manager.js";
 
 function passAllReactions(rooms: RoomManager, sessions: Session[], initial: RoomSnapshot): RoomSnapshot {
@@ -359,6 +359,23 @@ function startCustomGame(factory: () => InitialGameState): { rooms: RoomManager;
   return { rooms, sessions, started: rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken) };
 }
 
+function startTwoRoundCustomGame(factory: () => InitialGameState): { rooms: RoomManager; sessions: Session[]; started: RoomSnapshot } {
+  let factoryCalls = 0;
+  const rooms = new RoomManager(
+    () => 0,
+    (seats, dealerSeat, _randomIndex, roundNumber) => {
+      factoryCalls += 1;
+      return factoryCalls === 1 ? factory() : createInitialGame(seats, dealerSeat, () => 0, roundNumber);
+    },
+  );
+  const sessions = [rooms.createRoom("东")];
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  return { rooms, sessions, started: rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken) };
+}
+
 function createSelfDrawGame(): InitialGameState {
   const pool = createFullTileSet();
   const take = (code: Tile["code"]): Tile => {
@@ -409,6 +426,45 @@ test("自摸候选只下发给当前玩家并在确认后结束本局", () => {
   assert.equal(result.snapshot.game?.roundResult?.tile, "east");
   assert.deepEqual(result.snapshot.game?.roundResult?.scoreDeltas, [96, -32, -32, -32]);
   assert.deepEqual(result.snapshot.scoreTotals, [296, 168, 168, 168]);
+});
+
+test("庄家胡牌后连庄并保留累计分进入下一局", () => {
+  const { rooms, sessions, started } = startTwoRoundCustomGame(createSelfDrawGame);
+  assert.throws(
+    () => rooms.startNextRound(started.roomCode, sessions[0]!.playerToken),
+    (error) => error instanceof RoomError && error.code === "ROUND_ACTIVE",
+  );
+  const ended = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, "zimo").snapshot;
+  assert.deepEqual(ended.scoreTotals, [296, 168, 168, 168]);
+  assert.throws(
+    () => rooms.startNextRound(started.roomCode, sessions[1]!.playerToken),
+    (error) => error instanceof RoomError && error.code === "HOST_REQUIRED",
+  );
+
+  const next = rooms.startNextRound(started.roomCode, sessions[0]!.playerToken);
+  assert.equal(next.game?.roundNumber, 2);
+  assert.equal(next.game?.dealerSeat, 0);
+  assert.equal(next.game?.turnSeat, 0);
+  assert.deepEqual(next.scoreTotals, [296, 168, 168, 168]);
+  assert.deepEqual(next.game?.scorePayments, []);
+  assert.deepEqual(next.game?.scoreDeltas, [0, 0, 0, 0]);
+  assert.deepEqual(next.game?.handTileCounts, [14, 13, 13, 13]);
+});
+
+test("闲家胡牌后由原庄下家坐庄", () => {
+  const { rooms, sessions, started } = startTwoRoundCustomGame(createDiscardHuGame);
+  rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "east");
+  const winnerView = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+  const hu = winnerView.game!.availableOperations!.find((option) => option.kind === "hu")!;
+  const ended = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, hu.id).snapshot;
+  assert.deepEqual(ended.scoreTotals, [168, 248, 192, 192]);
+
+  const next = rooms.startNextRound(started.roomCode, sessions[0]!.playerToken);
+  assert.equal(next.game?.roundNumber, 2);
+  assert.equal(next.game?.dealerSeat, 1);
+  assert.equal(next.game?.turnSeat, 1);
+  assert.deepEqual(next.scoreTotals, [168, 248, 192, 192]);
+  assert.deepEqual(next.game?.handTileCounts, [13, 14, 13, 13]);
 });
 
 function createConcealedGangGame(): InitialGameState {

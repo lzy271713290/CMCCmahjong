@@ -171,6 +171,26 @@ webSockets.on("connection", (socket) => {
           logInfo("game_started", { connectionId, roomCode: session.roomCode, playerCount: snapshot.players.length, revision: snapshot.revision });
           break;
         }
+        case "start_next_round": {
+          const session = requireSession(socket);
+          const snapshot = manager.startNextRound(session.roomCode, session.playerToken);
+          broadcast(session.roomCode);
+          logInfo("round_started", {
+            connectionId,
+            roomCode: session.roomCode,
+            modelVersion: snapshot.game?.modelVersion,
+            roundNumber: snapshot.game?.roundNumber,
+            dealerSeat: snapshot.game?.dealerSeat,
+            turnSeat: snapshot.game?.turnSeat,
+            wallRemaining: snapshot.game?.wallRemaining,
+            handTileCounts: snapshot.game?.handTileCounts.join(","),
+            totalTiles: (snapshot.game?.wallRemaining ?? 0) + (snapshot.game?.handTileCounts.reduce((sum, count) => sum + count, 0) ?? 0),
+            scoreTotals: snapshot.scoreTotals.join(","),
+            privacyMode: "self_hand_only",
+            revision: snapshot.revision,
+          });
+          break;
+        }
         case "discard_tile": {
           const session = requireSession(socket);
           const result = manager.discardTile(session.roomCode, session.playerToken, message.tile);

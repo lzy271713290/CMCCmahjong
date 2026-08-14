@@ -133,6 +133,7 @@ body.in-game .shell { display: none; }
 .score-summary strong { font-size: 16px; }
 .score-summary span { font-size: 12px; font-weight: 800; }
 .score-summary small { max-height: 32px; overflow: auto; color: #cce7df; font-size: 10px; line-height: 1.35; }
+.score-summary .next-round-button { width: auto; min-height: 30px; margin: 2px auto 0; padding: 5px 18px; border-color: #ffd66f; background: linear-gradient(180deg, #ffe88c, #d99a22); color: #4b2600; font-weight: 800; }
 
 .self-area { position: absolute; z-index: 25; right: 3.5%; bottom: max(1.8%, env(safe-area-inset-bottom)); left: 15%; display: flex; justify-content: center; }
 .self-hand { display: flex; align-items: flex-end; justify-content: center; gap: 3px; min-height: 70px; filter: drop-shadow(0 8px 7px rgba(0,0,0,.42)); }

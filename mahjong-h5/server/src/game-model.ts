@@ -11,7 +11,7 @@ import type {
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "scoring-ledger-v5";
+export const GAME_MODEL_VERSION = "round-loop-v6";
 
 export type Tile = {
   code: TileCode;
@@ -20,7 +20,7 @@ export type Tile = {
 
 export type InitialGameState = {
   modelVersion: typeof GAME_MODEL_VERSION;
-  roundNumber: 1;
+  roundNumber: number;
   dealerSeat: number;
   turnSeat: number;
   stage: "awaiting_discard" | "awaiting_reactions" | "round_ended";
@@ -90,12 +90,14 @@ export function createInitialGame(
   playerSeats: readonly number[],
   dealerSeat: number,
   randomIndex: (maxExclusive: number) => number = randomInt,
+  roundNumber = 1,
 ): InitialGameState {
   const seats = [...playerSeats].sort((left, right) => left - right);
   if (seats.length !== 4 || new Set(seats).size !== 4 || seats.some((seat) => seat < 0 || seat > 3)) {
     throw new Error("初始化牌局需要四个不同的有效座位");
   }
   if (!seats.includes(dealerSeat)) throw new Error("庄家座位必须属于当前玩家");
+  if (!Number.isInteger(roundNumber) || roundNumber < 1) throw new Error("局数必须是正整数");
 
   const wall = shuffleTiles(createFullTileSet(), randomIndex);
   const hands = new Map(seats.map((seat) => [seat, [] as Tile[]]));
@@ -117,7 +119,7 @@ export function createInitialGame(
 
   const game: InitialGameState = {
     modelVersion: GAME_MODEL_VERSION,
-    roundNumber: 1,
+    roundNumber,
     dealerSeat,
     turnSeat: dealerSeat,
     stage: "awaiting_discard",

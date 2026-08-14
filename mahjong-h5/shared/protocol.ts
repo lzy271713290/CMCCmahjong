@@ -103,6 +103,7 @@ export type ClientMessage =
   | { type: "set_ready"; ready: boolean }
   | { type: "fill_test_players" }
   | { type: "start_game" }
+  | { type: "start_next_round" }
   | { type: "discard_tile"; tile: TileCode }
   | { type: "react_to_discard"; operationId: string | "pass" }
   | { type: "perform_turn_operation"; operationId: string }

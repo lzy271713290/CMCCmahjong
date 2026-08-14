@@ -229,6 +229,33 @@ export class RoomManager {
     return this.snapshot(room.code);
   }
 
+  startNextRound(rawCode: string, playerToken: string): RoomSnapshot {
+    const room = this.getRoom(rawCode);
+    const operator = room.players.find((candidate) => candidate.token === playerToken);
+    if (!operator) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    if (operator.id !== room.hostPlayerId) throw new RoomError("HOST_REQUIRED", "只有房主可以开始下一局");
+    if (room.phase !== "playing" || !room.game) throw new RoomError("GAME_NOT_STARTED", "牌局尚未开始");
+    if (room.game.stage !== "round_ended" || !room.game.roundResult) throw new RoomError("ROUND_ACTIVE", "本局尚未结束");
+
+    const previous = room.game;
+    const previousResult = previous.roundResult;
+    if (!previousResult) throw new RoomError("ROUND_ACTIVE", "本局尚未结束");
+    const dealerContinues = previousResult.reason === "wall_exhausted"
+      || previousResult.winnerSeats.includes(previous.dealerSeat);
+    const nextDealerSeat = dealerContinues ? previous.dealerSeat : (previous.dealerSeat + 1) % 4;
+    const nextRoundNumber = previous.roundNumber + 1;
+    const nextGame = this.gameFactory(
+      room.players.map((player) => player.seat),
+      nextDealerSeat,
+      this.gameRandomIndex,
+      nextRoundNumber,
+    );
+    nextGame.roundNumber = nextRoundNumber;
+    room.game = nextGame;
+    room.revision += 1;
+    return this.snapshot(room.code);
+  }
+
   discardTile(rawCode: string, playerToken: string, tileCode: TileCode): TurnProgress {
     const room = this.getRoom(rawCode);
     const player = room.players.find((candidate) => candidate.token === playerToken);
