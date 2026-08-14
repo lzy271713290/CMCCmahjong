@@ -27,6 +27,7 @@ pnpm start
 
 - `mahjong-h5/`：H5 客户端、TypeScript 服务端、测试和牌桌素材。
 - `deliverables/`：麻将规则需求规格文档。
+- `docs/`：项目进度和阿里云部署记录。
 - `sources/`：项目同步参考目录。
 
 ## 开源参考
