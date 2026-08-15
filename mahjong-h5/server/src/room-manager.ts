@@ -9,10 +9,13 @@ import {
   findTurnOperationOptions,
   selectReactionClaims,
   sortTiles,
+  GAME_MODEL_VERSION,
   type InitialGameState,
   type Tile,
 } from "./game-model.js";
 import { calculateHuPayments, calculateKongPayments, calculateScoreDeltas } from "./scoring.js";
+import { logWarn } from "./logger.js";
+import { RoomStore } from "./room-store.js";
 
 type Player = {
   id: string;
@@ -216,6 +219,35 @@ export type AdminStats = {
   testPlayerCount: number;
 };
 
+export type AdminForceCloseResult = {
+  roomCode: string;
+  reason: string;
+  playerSeats: number[];
+};
+
+export type PersistedRoomEnvelope = {
+  schemaVersion: 1;
+  gameModelVersion: string;
+  savedAt: string;
+  rooms: Array<PersistedRoom>;
+};
+
+type PersistedGame = Omit<InitialGameState, "hands" | "melds" | "pendingReaction"> & {
+  hands: Array<[number, Tile[]]>;
+  melds: Array<[number, MeldView[]]>;
+  pendingReaction?: Omit<NonNullable<InitialGameState["pendingReaction"]>, "optionsBySeat" | "responses"> & {
+    optionsBySeat: Array<[number, ReactionOption[]]>;
+    responses: Array<[number, string | "pass"]>;
+  };
+};
+
+type PersistedRoom = Omit<Room, "earlySettlement" | "game"> & {
+  earlySettlement?: Omit<NonNullable<Room["earlySettlement"]>, "responses"> & {
+    responses: Array<[number, boolean]>;
+  };
+  game?: PersistedGame;
+};
+
 type ReactionWindowDiagnostic = {
   discard: DiscardView;
   eligibleSeats: number[];
@@ -229,6 +261,10 @@ type AutomaticProgress = {
   autoDiscards: Array<{ seat: number; tile: TileCode; wallRemaining: number }>;
   reactionWindows: ReactionWindowDiagnostic[];
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
 
 export class RoomError extends Error {
   constructor(
@@ -246,6 +282,7 @@ export class RoomManager {
     private readonly gameRandomIndex: (maxExclusive: number) => number = randomInt,
     private readonly gameFactory: typeof createInitialGame = createInitialGame,
     private readonly now: () => number = Date.now,
+    private readonly store?: RoomStore,
   ) {}
 
   createRoom(rawName: string, totalRounds: MatchMode = 8): Session {
@@ -989,6 +1026,110 @@ export class RoomManager {
           }
         : undefined,
     };
+  }
+
+  forceCloseRoomByAdmin(rawCode: string, reason = "管理员强制解散房间"): AdminForceCloseResult {
+    const room = this.getRoom(rawCode);
+    const playerSeats = room.players.map((player) => player.seat);
+    this.rooms.delete(room.code);
+    return { roomCode: room.code, reason, playerSeats };
+  }
+
+  exportPersistedState(): PersistedRoomEnvelope {
+    return {
+      schemaVersion: 1,
+      gameModelVersion: GAME_MODEL_VERSION,
+      savedAt: new Date().toISOString(),
+      rooms: [...this.rooms.values()].map((room) => this.serializeRoom(room)),
+    };
+  }
+
+  restorePersistedState(input: unknown): { restoredCount: number; skipped: string[] } {
+    if (!isRecord(input) || input.schemaVersion !== 1 || input.gameModelVersion !== GAME_MODEL_VERSION) {
+      throw new RoomError("PERSISTENCE_VERSION_MISMATCH", "持久化数据版本与当前程序不匹配");
+    }
+    if (!Array.isArray(input.rooms)) throw new RoomError("PERSISTENCE_INVALID", "持久化数据缺少房间列表");
+    const restored: Room[] = [];
+    const skipped: string[] = [];
+    for (const raw of input.rooms) {
+      try {
+        const room = this.deserializeRoom(raw);
+        if (this.rooms.has(room.code)) throw new Error("房间号重复");
+        restored.push(room);
+      } catch {
+        skipped.push(isRecord(raw) && typeof raw.code === "string" ? raw.code : "unknown");
+      }
+    }
+    this.rooms.clear();
+    for (const room of restored) this.rooms.set(room.code, room);
+    return { restoredCount: restored.length, skipped };
+  }
+
+  async restoreFromStore(): Promise<{ restoredCount: number; skipped: string[] }> {
+    if (!this.store) return { restoredCount: 0, skipped: [] };
+    const payload = await this.store.load();
+    if (!payload) return { restoredCount: 0, skipped: [] };
+    return this.restorePersistedState(JSON.parse(payload));
+  }
+
+  async persistToStore(): Promise<boolean> {
+    if (!this.store) return false;
+    try {
+      await this.store.save(JSON.stringify(this.exportPersistedState()));
+      return true;
+    } catch (error) {
+      logWarn("room_persist_failed", { message: error instanceof Error ? error.message.slice(0, 160) : "unknown" });
+      return false;
+    }
+  }
+
+  private serializeRoom(room: Room): PersistedRoom {
+    return {
+      ...room,
+      earlySettlement: room.earlySettlement
+        ? { ...room.earlySettlement, responses: [...room.earlySettlement.responses.entries()] }
+        : undefined,
+      game: room.game
+        ? {
+            ...room.game,
+            hands: [...room.game.hands.entries()],
+            melds: [...room.game.melds.entries()],
+            pendingReaction: room.game.pendingReaction
+              ? {
+                  ...room.game.pendingReaction,
+                  optionsBySeat: [...room.game.pendingReaction.optionsBySeat.entries()],
+                  responses: [...room.game.pendingReaction.responses.entries()],
+                }
+              : undefined,
+          }
+        : undefined,
+    };
+  }
+
+  private deserializeRoom(raw: unknown): Room {
+    if (!isRecord(raw) || typeof raw.code !== "string" || !/^\d{6}$/.test(raw.code) || !Array.isArray(raw.players) || typeof raw.revision !== "number") {
+      throw new Error("房间字段不完整");
+    }
+    const gameRaw = raw.game as PersistedGame | undefined;
+    const game = gameRaw
+      ? {
+          ...gameRaw,
+          hands: new Map(gameRaw.hands),
+          melds: new Map(gameRaw.melds),
+          pendingReaction: gameRaw.pendingReaction
+            ? {
+                ...gameRaw.pendingReaction,
+                optionsBySeat: new Map(gameRaw.pendingReaction.optionsBySeat),
+                responses: new Map(gameRaw.pendingReaction.responses),
+              }
+            : undefined,
+        }
+      : undefined;
+    const earlySettlementRaw = raw.earlySettlement as PersistedRoom["earlySettlement"] | undefined;
+    const earlySettlement = earlySettlementRaw
+      ? { ...earlySettlementRaw, responses: new Map(earlySettlementRaw.responses) }
+      : undefined;
+    return { ...raw, earlySettlement, game } as Room;
   }
 
   private buildSnapshot(room: Room, viewer?: Player): RoomSnapshot {

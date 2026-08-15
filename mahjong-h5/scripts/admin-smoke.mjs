@@ -3,7 +3,7 @@ import WebSocket from "ws";
 const args = process.argv.slice(2).filter((arg) => arg !== "--");
 const httpBaseUrl = (args[0] ?? "http://127.0.0.1:3000").replace(/\/+$/, "");
 const token = args[1] ?? process.env.ADMIN_TOKEN;
-const expectedVersion = args[2] ?? "admin-monitor-v16";
+const expectedVersion = args[2] ?? "persist-control-v17";
 
 if (!token) throw new Error("缺少 ADMIN_TOKEN");
 
@@ -74,6 +74,28 @@ try {
   const missing = await fetch(httpBaseUrl + "/api/admin/rooms/000000?token=" + encodeURIComponent(token));
   if (missing.status !== 404) throw new Error("不存在的房间应返回 404，实际 " + missing.status);
 
+  const announceResponse = await fetch(httpBaseUrl + "/api/admin/rooms/" + roomCode + "/actions?token=" + encodeURIComponent(token), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "announce", message: "后台冒烟公告" }),
+  });
+  const announceBody = await checkedJson(announceResponse, "发送管理员公告");
+  if (announceBody.recipients < 1 || announceBody.message !== "后台冒烟公告") throw new Error("管理员公告未正确送达");
+
+  const closedWait = nextMessage(socket, "room_closed");
+  const forceResponse = await fetch(httpBaseUrl + "/api/admin/rooms/" + roomCode + "/actions?token=" + encodeURIComponent(token), {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ action: "force_close", reason: "冒烟测试强制解散" }),
+  });
+  const forceBody = await checkedJson(forceResponse, "强制解散房间");
+  if (forceBody.roomCode !== roomCode || forceBody.playerSeats.length < 1) throw new Error("强制解散结果异常");
+  const closedMessage = await closedWait;
+  if (closedMessage.roomCode !== roomCode || !closedMessage.reason) throw new Error("客户端未收到房间解散消息");
+
+  const summaryAfterClose = await checkedJson(await fetch(httpBaseUrl + "/api/admin/summary?token=" + encodeURIComponent(token)), "解散后的后台概览");
+  if (summaryAfterClose.rooms.some((room) => room.code === roomCode)) throw new Error("强制解散后房间仍存在");
+
   const result = {
     httpBaseUrl,
     modelVersion: health.modelVersion,
@@ -84,6 +106,10 @@ try {
     roomPhase: room.phase,
     playerCount: detail.room.players.length,
     privacyFree: !/playerToken|selfHand|selfDrawnTile/.test(serialized),
+    announceRecipients: announceBody.recipients,
+    forceClosed: forceBody.roomCode === roomCode,
+    clientNotified: closedMessage.roomCode === roomCode && Boolean(closedMessage.reason),
+    roomClearedAfterClose: !summaryAfterClose.rooms.some((room) => room.code === roomCode),
   };
   console.log(JSON.stringify(result));
   if (
@@ -93,7 +119,11 @@ try {
     result.connectedSockets < 1 ||
     result.roomPhase !== "waiting" ||
     result.playerCount !== 1 ||
-    !result.privacyFree
+    !result.privacyFree ||
+    result.announceRecipients < 1 ||
+    !result.forceClosed ||
+    !result.clientNotified ||
+    !result.roomClearedAfterClose
   ) {
     process.exitCode = 1;
   }

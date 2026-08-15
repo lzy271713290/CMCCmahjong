@@ -41,3 +41,11 @@ test("大厅规则帮助准确说明两类特殊杠", () => {
   assert.match(help, /中发白和东南西北两类特殊杠/);
   assert.doesNotMatch(help, /幺鸡特殊杠/);
 });
+
+test("大厅提供男声女声选择并保存试听入口", () => {
+  const help = readFileSync(fileURLToPath(new URL("../../../client/public/index.html", import.meta.url)), "utf8");
+  assert.match(help, /id="gender-female"/);
+  assert.match(help, /id="gender-male"/);
+  assert.match(help, /id="gender-preview"/);
+  assert.match(help, /id="voice-gender-game"/);
+});

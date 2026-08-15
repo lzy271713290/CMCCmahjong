@@ -1162,3 +1162,31 @@ test("胡牌和本局结束写入公共操作时间线", () => {
   assert.equal(result.snapshot.publicActions.at(-2)?.fromSeat, 0);
   assert.equal(result.snapshot.publicActions.at(-2)?.tile, "east");
 });
+
+test("房间序列化后可恢复完整牌局、待响应状态和私密身份", () => {
+  const { rooms, sessions, started } = startCustomGame(createDiscardHuGame);
+  rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "east");
+  const envelope = rooms.exportPersistedState();
+  const restoredRooms = new RoomManager();
+  const restored = restoredRooms.restorePersistedState(envelope);
+  assert.equal(restored.restoredCount, 1);
+  assert.equal(restored.skipped.length, 0);
+  const view = restoredRooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+  assert.equal(view.game?.stage, "awaiting_reactions");
+  assert.equal(view.game?.handTileCounts.reduce((sum, count) => sum + count, 0), 52);
+  assert.equal(view.game?.wallRemaining, 83);
+  assert.ok(view.game?.availableOperations?.some((option) => option.kind === "hu"));
+  const closed = restoredRooms.forceCloseRoomByAdmin(started.roomCode, "测试强制解散");
+  assert.equal(closed.playerSeats.length, 4);
+});
+
+test("版本不匹配的持久化数据会被拒绝恢复", () => {
+  const rooms = new RoomManager();
+  rooms.createRoom("旧房主");
+  const envelope = rooms.exportPersistedState() as { gameModelVersion: string };
+  envelope.gameModelVersion = "legacy-v1";
+  assert.throws(
+    () => new RoomManager().restorePersistedState(envelope),
+    (error) => error instanceof RoomError && error.code === "PERSISTENCE_VERSION_MISMATCH",
+  );
+});

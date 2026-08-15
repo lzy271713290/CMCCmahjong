@@ -2,8 +2,9 @@ import type { TileCode } from "../../shared/protocol.js";
 
 export type ActionVoice = "chi" | "peng" | "gang" | "hu";
 export type EffectSound = "deal" | "discard" | "select" | "shuffle" | "timeup" | "ui" | "win" | "lose";
+export type VoiceGender = "female" | "male";
 export type AudioChannel = "voice" | "effects" | "music";
-export type AudioSettings = { voice: boolean; effects: boolean; music: boolean };
+export type AudioSettings = { voice: boolean; effects: boolean; music: boolean; gender: VoiceGender };
 export type AudioMonitorEvent = {
   event: "audio_ready" | "audio_settings_changed" | "audio_asset_failed" | "audio_bgm_started" | "audio_bgm_stopped" | "audio_voice_requested";
   channel?: AudioChannel;
@@ -13,6 +14,7 @@ export type AudioMonitorEvent = {
   voice?: boolean;
   effects?: boolean;
   music?: boolean;
+  gender?: VoiceGender;
 };
 
 const SOUND_ROOT = "/assets/babykylin/sounds";
@@ -69,11 +71,11 @@ export function effectSoundPath(effect: EffectSound): string {
 }
 
 function readSettings(): AudioSettings {
-  const defaults: AudioSettings = { voice: true, effects: true, music: true };
+  const defaults: AudioSettings = { voice: true, effects: true, music: true, gender: "female" };
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
     if (!raw) {
-      if (localStorage.getItem("mahjong-sound") === "off") return { voice: false, effects: false, music: false };
+      if (localStorage.getItem("mahjong-sound") === "off") return { voice: false, effects: false, music: false, gender: "female" };
       return defaults;
     }
     const parsed = JSON.parse(raw) as Partial<AudioSettings>;
@@ -81,6 +83,7 @@ function readSettings(): AudioSettings {
       voice: parsed.voice !== false,
       effects: parsed.effects !== false,
       music: parsed.music !== false,
+      gender: parsed.gender === "male" ? "male" : "female",
     };
   } catch {
     return defaults;
@@ -130,8 +133,12 @@ export class MahjongAudioManager {
     if (!inGame) this.stopBgm();
   }
 
-  updateSettings(next: AudioSettings): void {
-    this.settings = { ...next };
+  setGender(gender: VoiceGender): void {
+    this.updateSettings({ gender });
+  }
+
+  updateSettings(next: Partial<AudioSettings>): void {
+    this.settings = { ...this.settings, ...next };
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
     localStorage.setItem("mahjong-sound", this.hasAnySound() ? "on" : "off");
     this.monitor({ event: "audio_settings_changed", ...this.settings });
@@ -146,13 +153,13 @@ export class MahjongAudioManager {
   playTile(tile: TileCode): void {
     if (!this.settings.voice) return;
     const path = tileVoicePath(tile);
-    this.monitor({ event: "audio_voice_requested", channel: "voice", tile, asset: path.split("/").at(-1) });
-    this.playOneShot(path, "voice", 0.9, true);
+    this.monitor({ event: "audio_voice_requested", channel: "voice", tile, gender: this.settings.gender, asset: path.split("/").at(-1) });
+    this.playOneShot(path, "voice", 0.9, true, this.voicePitch());
   }
 
   playAction(action: ActionVoice): void {
     if (!this.settings.voice) return;
-    this.playOneShot(actionVoicePath(action), "voice", action === "hu" ? 1 : 0.92, true);
+    this.playOneShot(actionVoicePath(action), "voice", action === "hu" ? 1 : 0.92, true, this.voicePitch());
   }
 
   playEffect(effect: EffectSound, delayMs = 0): void {
@@ -162,6 +169,10 @@ export class MahjongAudioManager {
 
   private hasAnySound(): boolean {
     return this.settings.voice || this.settings.effects || this.settings.music;
+  }
+
+  private voicePitch(): number {
+    return this.settings.gender === "male" ? 0.86 : 1;
   }
 
   private async startBgm(): Promise<void> {
@@ -204,7 +215,7 @@ export class MahjongAudioManager {
     this.monitor({ event: "audio_bgm_stopped", channel: "music", asset: "bgFight.mp3" });
   }
 
-  private async playOneShot(path: string, channel: "voice" | "effects", volume: number, duckMusic = false): Promise<void> {
+  private async playOneShot(path: string, channel: "voice" | "effects", volume: number, duckMusic = false, playbackRate = 1): Promise<void> {
     if (!this.activated) return;
     try {
       const context = this.requireContext();
@@ -212,6 +223,7 @@ export class MahjongAudioManager {
       const source = context.createBufferSource();
       const gain = context.createGain();
       source.buffer = buffer;
+      source.playbackRate.value = playbackRate;
       gain.gain.value = volume;
       source.connect(gain).connect(this.requireMasterGain());
       if (duckMusic && this.bgmGain) {

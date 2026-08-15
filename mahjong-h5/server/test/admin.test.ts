@@ -71,3 +71,15 @@ test("后台查询不存在的房间返回房间不存在错误", () => {
     (error) => error instanceof RoomError && error.code === "ROOM_NOT_FOUND",
   );
 });
+
+test("后台可以强制解散进行中的房间并清空概览", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("房主");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+  rooms.setReady(host.roomCode, host.playerToken, true);
+  rooms.startGame(host.roomCode, host.playerToken);
+  const closed = rooms.forceCloseRoomByAdmin(host.roomCode, "维护强制解散");
+  assert.deepEqual(closed.playerSeats, [0, 1, 2, 3]);
+  assert.equal(closed.reason, "维护强制解散");
+  assert.equal(rooms.adminStats().roomCount, 0);
+});

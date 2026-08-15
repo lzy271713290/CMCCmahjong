@@ -12,6 +12,7 @@
     "smoke:full-round": "node scripts/full-round-smoke.mjs"
   },
   "dependencies": {
+    "ioredis": "^6.0.0",
     "ws": "^8.18.3"
   },
   "devDependencies": {

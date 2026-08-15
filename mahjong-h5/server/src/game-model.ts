@@ -11,7 +11,7 @@ import type {
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "admin-monitor-v16";
+export const GAME_MODEL_VERSION = "persist-control-v17";
 
 export type Tile = {
   code: TileCode;

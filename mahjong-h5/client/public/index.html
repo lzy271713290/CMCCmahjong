@@ -18,6 +18,14 @@
         <h2>一起开一桌</h2>
         <p class="muted">输入昵称后开房，朋友用六位房间号加入。</p>
         <label>你的昵称<input id="name" maxlength="12" autocomplete="nickname" placeholder="例如：老张" /></label>
+        <div class="gender-picker">
+          <span>报牌声音</span>
+          <div class="gender-options">
+            <button id="gender-female" class="gender-option active" type="button" aria-pressed="true">女声</button>
+            <button id="gender-male" class="gender-option" type="button" aria-pressed="false">男声</button>
+          </div>
+          <button id="gender-preview" class="gender-preview" type="button" aria-label="试听报牌声音">试听</button>
+        </div>
         <label>整场局数<select id="match-rounds"><option value="8">8局</option><option value="16">16局</option></select></label>
         <button id="create" class="primary">创建房间</button>
         <div class="divider"><span>或加入朋友的房间</span></div>
@@ -63,6 +71,7 @@
             <label><input id="voice-toggle" type="checkbox" />真人语音报牌</label>
             <label><input id="effects-toggle" type="checkbox" />操作与结算音效</label>
             <label><input id="music-toggle" type="checkbox" />牌桌背景音乐</label>
+            <label class="audio-gender"><span>报牌声音</span><select id="voice-gender-game"><option value="female">女声</option><option value="male">男声</option></select></label>
             <div class="audio-preview"><button id="voice-preview" type="button">试听报牌</button><button id="effect-preview" type="button">预览胡牌</button></div>
             <small>首次点击牌桌后浏览器才允许播放</small>
           </div>
@@ -116,7 +125,7 @@
           <section><h3>响应顺序</h3><p>胡优先于杠、碰、吃；只有弃牌者的下家能吃。多人同时可胡时按当前规则结算。</p></section>
           <section><h3>本项目规则</h3><p>支持普通胡、七对、自摸、点炮、明杠、暗杠、加杠、抢杠胡，以及中发白和东南西北两类特殊杠、涨毛。</p></section>
           <section><h3>结算与断线</h3><p>任意玩家可申请解散，四人一致同意才结束；未完成局不计局数，已结算杠分保留。掉线90秒进入托管，重连立即接管。</p></section>
-          <section><h3>声音与特效</h3><p>牌桌提供34张牌真人语音、吃碰杠胡报音、背景音乐和结算特效；点击右上角“声”可分别开关。</p></section>
+          <section><h3>声音与特效</h3><p>牌桌提供34张牌真人语音、男声/女声切换、吃碰杠胡报音、背景音乐、结算特效和粒子动画；点击右上角“声”可分别开关。</p></section>
           <section><h3>房间管理</h3><p>等待时可退出，房主退出会自动转给下一位真人；误加测试玩家可一键移除。牌局进行中请勿主动退出。</p></section>
         </div>
         <button id="rules-close" class="primary" type="button">知道了，开始打牌</button>

@@ -1,0 +1,23 @@
+[Unit]
+Description=CMCC Mahjong H5 Server
+After=network.target redis-server.service
+Wants=redis-server.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/CMCCmahjong/mahjong-h5
+Environment=NODE_ENV=production
+Environment=PORT=3000
+Environment=ADMIN_TOKEN=change-me
+Environment=REDIS_URL=redis://127.0.0.1:6379
+ExecStart=/root/.nvm/versions/node/v24.19.0/bin/node dist/server/src/index.js
+Restart=always
+RestartSec=3
+StandardOutput=append:/opt/CMCCmahjong/mahjong-h5/logs/systemd-out.log
+StandardError=append:/opt/CMCCmahjong/mahjong-h5/logs/systemd-error.log
+NoNewPrivileges=true
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

@@ -6,12 +6,14 @@ import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.js";
 import { RoomError, RoomManager, type Session } from "./room-manager.js";
+import { RoomStore } from "./room-store.js";
 import { instanceId, logError, logInfo, logWarn, shortId } from "./logger.js";
 import { GAME_MODEL_VERSION } from "./game-model.js";
 
 const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
 const adminToken = process.env.ADMIN_TOKEN;
-const manager = new RoomManager();
+const roomStore = new RoomStore(process.env.REDIS_URL);
+const manager = new RoomManager(undefined, undefined, undefined, roomStore);
 const socketsByToken = new Map<string, WebSocket>();
 const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string }>();
 const projectRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -35,10 +37,35 @@ function adminAuthorized(request: IncomingMessage): boolean {
   return request.headers.authorization === `Bearer ${adminToken}`;
 }
 
+function readJsonBody(request: IncomingMessage): Promise<unknown> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    request.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 64 * 1024) {
+        reject(new Error("请求体过大"));
+        request.destroy();
+        return;
+      }
+      chunks.push(chunk);
+    });
+    request.on("end", () => {
+      try {
+        resolve(JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}"));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    request.on("error", reject);
+  });
+}
+
 function adminSummaryPayload() {
   return {
     ok: true,
     modelVersion: GAME_MODEL_VERSION,
+    persistence: roomStore.enabled ? "redis" : "memory",
     instanceId,
     pid: process.pid,
     port,
@@ -50,11 +77,11 @@ function adminSummaryPayload() {
   };
 }
 
-const server = createServer((request, response) => {
+const server = createServer(async (request, response) => {
   const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
   if (pathname === "/healthz") {
     response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-    response.end(JSON.stringify({ ok: true, modelVersion: GAME_MODEL_VERSION, instanceId, uptimeSeconds: Math.floor(process.uptime()), roomCount: manager.adminStats().roomCount, connectedSockets: webSockets.clients.size }));
+    response.end(JSON.stringify({ ok: true, modelVersion: GAME_MODEL_VERSION, persistence: roomStore.enabled ? "redis" : "memory", instanceId, uptimeSeconds: Math.floor(process.uptime()), roomCount: manager.adminStats().roomCount, connectedSockets: webSockets.clients.size }));
     return;
   }
   let filePath: string | undefined;
@@ -73,6 +100,53 @@ const server = createServer((request, response) => {
     }
     response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
     response.end(JSON.stringify(adminSummaryPayload()));
+    return;
+  } else if (request.method === "POST" && /^\/api\/admin\/rooms\/[^/]+\/actions$/.test(pathname)) {
+    if (!adminAuthorized(request)) {
+      response.writeHead(401, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code: "ADMIN_UNAUTHORIZED", message: "后台令牌无效" }));
+      return;
+    }
+    const roomMatch = /^\/api\/admin\/rooms\/([^/]+)\/actions$/.exec(pathname);
+    if (!roomMatch?.[1]) {
+      response.writeHead(400, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code: "BAD_ROOM", message: "房间号无效" }));
+      return;
+    }
+    const roomCode = decodeURIComponent(roomMatch[1]);
+    let body: Record<string, unknown>;
+    try {
+      body = (await readJsonBody(request)) as Record<string, unknown>;
+    } catch {
+      response.writeHead(400, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code: "BAD_JSON", message: "管理操作请求体必须是 JSON" }));
+      return;
+    }
+    try {
+      const action = typeof body.action === "string" ? body.action : "";
+      if (action === "force_close") {
+        const reason = typeof body.reason === "string" && body.reason.trim() ? body.reason.trim().slice(0, 80) : "管理员强制解散房间";
+        const result = manager.forceCloseRoomByAdmin(roomCode, reason);
+        notifyRoomClosed(result.roomCode, result.reason);
+        logInfo("admin_force_close", { roomCode: result.roomCode, reason: result.reason, playerSeats: result.playerSeats.join(",") });
+        response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+        response.end(JSON.stringify({ ok: true, roomCode: result.roomCode, reason: result.reason, playerSeats: result.playerSeats }));
+      } else if (action === "announce") {
+        const messageText = typeof body.message === "string" ? body.message.trim().slice(0, 200) : "";
+        if (!messageText) throw new RoomError("ANNOUNCE_REQUIRED", "公告内容不能为空");
+        const recipients = announceToRoom(roomCode, messageText);
+        logInfo("admin_announce", { roomCode, recipients, messageLength: messageText.length });
+        response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+        response.end(JSON.stringify({ ok: true, roomCode, recipients, message: messageText }));
+      } else {
+        throw new RoomError("ADMIN_ACTION_INVALID", "不支持的管理操作");
+      }
+    } catch (error) {
+      const code = error instanceof RoomError ? error.code : "BAD_ACTION";
+      const message = error instanceof Error ? error.message : "管理操作失败";
+      response.writeHead(code === "ROOM_NOT_FOUND" ? 404 : 400, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code, message }));
+    }
     return;
   } else if (pathname.startsWith("/api/admin/rooms/")) {
     if (!adminAuthorized(request)) {
@@ -132,6 +206,34 @@ function broadcast(roomCode: string): void {
       send(socket, { type: "snapshot", snapshot: manager.snapshotForPlayer(roomCode, session.playerToken) });
     }
   }
+}
+
+function notifyRoomClosed(roomCode: string, reason: string): void {
+  const socketsToClose: WebSocket[] = [];
+  for (const [socket, session] of sessionsBySocket) {
+    if (session.roomCode !== roomCode) continue;
+    send(socket, { type: "room_closed", roomCode, reason });
+    socketsToClose.push(socket);
+  }
+  for (const socket of socketsToClose) {
+    const session = sessionsBySocket.get(socket);
+    if (session) {
+      sessionsBySocket.delete(socket);
+      if (socketsByToken.get(session.playerToken) === socket) socketsByToken.delete(session.playerToken);
+    }
+    socket.close(4001, "room_closed");
+  }
+}
+
+function announceToRoom(roomCode: string, messageText: string): number {
+  let recipients = 0;
+  for (const [socket, session] of sessionsBySocket) {
+    if (session.roomCode === roomCode) {
+      send(socket, { type: "room_announcement", message: messageText });
+      recipients += 1;
+    }
+  }
+  return recipients;
 }
 
 function bindSession(socket: WebSocket, session: Session, connectionId: string, event: "room_created" | "room_joined" | "room_reconnected"): void {
@@ -682,7 +784,25 @@ server.on("error", (error) => {
   logError("server_error", { code, message: error.message });
 });
 
-server.listen(port, "0.0.0.0", () => {
-  logInfo("server_started", { port, nodeVersion: process.version });
-  console.log(`麻将联机样板已启动：http://localhost:${port}，实例：${instanceId}`);
+async function bootstrapPersistence(): Promise<void> {
+  if (!roomStore.enabled) return;
+  try {
+    await roomStore.connect();
+    const restored = await manager.restoreFromStore();
+    logInfo("rooms_restored", { restoredCount: restored.restoredCount, skippedCount: restored.skipped.length });
+  } catch (error) {
+    logWarn("redis_bootstrap_failed", { message: error instanceof Error ? error.message.slice(0, 160) : "unknown" });
+  }
+}
+
+const persistenceTimer = setInterval(() => {
+  void manager.persistToStore();
+}, 2_000);
+persistenceTimer.unref();
+
+void bootstrapPersistence().then(() => {
+  server.listen(port, "0.0.0.0", () => {
+    logInfo("server_started", { port, nodeVersion: process.version, persistence: roomStore.enabled ? "redis" : "memory" });
+    console.log(`麻将联机样板已启动：http://localhost:${port}，实例：${instanceId}，房间持久化：${roomStore.enabled ? "Redis" : "内存"}`);
+  });
 });

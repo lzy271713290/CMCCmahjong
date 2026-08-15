@@ -3,7 +3,7 @@ import { findDiscardReactionOptions } from "../dist/server/src/game-model.js";
 
 const args = process.argv.slice(2).filter((arg) => arg !== "--");
 const serverUrl = args[0] ?? "ws://127.0.0.1:3000/ws";
-const expectedVersion = args[1] ?? "admin-monitor-v16";
+const expectedVersion = args[1] ?? "persist-control-v17";
 const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
 
 function open() {

@@ -24,6 +24,13 @@ tbody tr { cursor:pointer; }
 tbody tr:hover td { background:#1b222d; }
 button { background:#1e2632; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 12px; cursor:pointer; }
 button:hover { border-color:var(--accent); }
+button.danger { background:#3a1f24; border-color:#5b2a31; color:#ffb4b4; }
+button.danger:hover { border-color:var(--bad); }
+.admin-actions { display:flex; gap:12px; align-items:end; flex-wrap:wrap; margin-top:10px; }
+.admin-actions label { display:flex; flex-direction:column; gap:6px; font-size:12px; color:var(--muted); }
+.admin-actions input { min-width:280px; }
+.admin-notice { margin-top:12px; padding:8px 12px; border:1px solid var(--line); border-radius:6px; background:#182130; }
+.admin-notice.error { border-color:var(--bad); color:var(--bad); }
 input { background:#0d1016; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; min-width:260px; }
 .badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; }
 .badge.waiting { background:#1d2c22; color:var(--ok); }
@@ -63,6 +70,23 @@ const tokenKey = "cmcc-admin-token";
 let token = sessionStorage.getItem(tokenKey) || "";
 let currentRoom = "";
 function api(path) { return fetch(path + (path.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(token)); }
+async function apiPost(path, payload) {
+  const response = await fetch(path + (path.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(token), { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) });
+  if (response.status === 401) { sessionStorage.removeItem(tokenKey); showLogin(); throw new Error("后台令牌已失效"); }
+  if (!response.ok) {
+    let message = "管理操作失败：" + response.status;
+    try { message = (await response.json()).message || message; } catch {}
+    throw new Error(message);
+  }
+  return response.json();
+}
+function showAdminNotice(text, isError = false) {
+  const element = document.getElementById("admin-notice");
+  if (!element) return;
+  element.textContent = text;
+  element.classList.toggle("error", isError);
+  element.hidden = false;
+}
 function esc(value) { return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch])); }
 function statusBadge(status) { return '<span class="badge ' + esc(status) + '">' + esc(status) + '</span>'; }
 function showLogin() { document.getElementById("dashboard").hidden = true; document.getElementById("login").hidden = false; }
@@ -98,6 +122,8 @@ async function loadRoom(code) {
   const room = data.room;
   document.getElementById("detail").hidden = false;
   document.getElementById("detail-title").textContent = "房间 " + room.code + " 详情";
+  const adminNotice = document.getElementById("admin-notice");
+  if (adminNotice) adminNotice.hidden = true;
   const playerRows = room.players.map((player) => '<tr><td>' + esc(player.seat) + '</td><td>' + esc(player.name) + '</td><td>' + esc(player.isHost ? "房主" : "-") + '</td><td>' + esc(player.isTestPlayer ? "测试" : "真人") + '</td><td>' + esc(player.connected ? "在线" : "离线") + '</td><td>' + esc(player.autoManaged ? "托管" : "-") + '</td><td>' + esc(player.offlineSeconds ?? "-") + '</td></tr>').join("");
   const game = room.game ? {
     roundNumber: room.game.roundNumber,
@@ -110,11 +136,44 @@ async function loadRoom(code) {
     discards: room.game.discards.length,
     melds: room.game.melds.length
   } : null;
-  const content = '<h3>玩家</h3><table><thead><tr><th>座位</th><th>昵称</th><th>身份</th><th>类型</th><th>连接</th><th>托管</th><th>离线秒</th></tr></thead><tbody>' + playerRows + '</tbody></table><h3>牌桌公开状态</h3><pre>' + esc(JSON.stringify({ game: game, scoreTotals: room.scoreTotals, publicActionCount: room.publicActions.length }, null, 2)) + '</pre><h3>最近公共动作</h3><pre>' + esc(JSON.stringify(room.publicActions.slice(-20), null, 2)) + '</pre>';
+  const content = '<h3>玩家</h3><table><thead><tr><th>座位</th><th>昵称</th><th>身份</th><th>类型</th><th>连接</th><th>托管</th><th>离线秒</th></tr></thead><tbody>' + playerRows + '</tbody></table><h3>牌桌公开状态</h3><pre>' + esc(JSON.stringify({ game: game, scoreTotals: room.scoreTotals, publicActionCount: room.publicActions.length }, null, 2)) + '</pre><h3>最近公共动作</h3><pre>' + esc(JSON.stringify(room.publicActions.slice(-20), null, 2)) + '</pre><h3>管理操作</h3><div class="admin-actions"><label>向房间内玩家发送公告<input id="announce-input" maxlength="200" placeholder="例如：维护结束，请勿创建新房间"></label><button id="announce-send" type="button">发送公告</button><button id="force-close" class="danger" type="button">强制解散房间</button></div><div id="admin-notice" class="admin-notice" hidden></div>';
   document.getElementById("detail-content").innerHTML = content;
 }
 document.getElementById("login-form").addEventListener("submit", (event) => { event.preventDefault(); token = document.getElementById("token").value.trim(); if (!token) return; sessionStorage.setItem(tokenKey, token); showDashboard(); loadSummary(); });
 document.getElementById("rooms").addEventListener("click", (event) => { const row = event.target.closest("tr[data-code]"); if (row) loadRoom(row.dataset.code); });
+document.getElementById("announce-send").addEventListener("click", async () => {
+  const input = document.getElementById("announce-input");
+  const message = input.value.trim();
+  if (!message || !currentRoom) return;
+  const button = document.getElementById("announce-send");
+  button.disabled = true;
+  try {
+    const data = await apiPost("/api/admin/rooms/" + encodeURIComponent(currentRoom) + "/actions", { action: "announce", message });
+    showAdminNotice("公告已发送给 " + data.recipients + " 名在线玩家");
+    input.value = "";
+  } catch (error) {
+    showAdminNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
+document.getElementById("force-close").addEventListener("click", async () => {
+  if (!currentRoom) return;
+  if (!window.confirm("确定强制解散房间 " + currentRoom + "？所有在线玩家会立即回到大厅。")) return;
+  const button = document.getElementById("force-close");
+  button.disabled = true;
+  try {
+    await apiPost("/api/admin/rooms/" + encodeURIComponent(currentRoom) + "/actions", { action: "force_close" });
+    showAdminNotice("房间 " + currentRoom + " 已强制解散");
+    currentRoom = "";
+    document.getElementById("detail").hidden = true;
+    loadSummary();
+  } catch (error) {
+    showAdminNotice(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+});
 document.getElementById("refresh").addEventListener("click", () => loadSummary());
 if (token) { showDashboard(); loadSummary(); setInterval(loadSummary, 5000); }
 </script>

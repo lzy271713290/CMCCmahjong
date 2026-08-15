@@ -189,5 +189,7 @@ export type ServerMessage =
     }
   | { type: "snapshot"; snapshot: RoomSnapshot }
   | { type: "left_room" }
+  | { type: "room_closed"; roomCode: string; reason: string }
+  | { type: "room_announcement"; message: string }
   | { type: "error"; code: string; message: string }
   | { type: "pong" };

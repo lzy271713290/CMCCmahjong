@@ -1,5 +1,5 @@
 import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
-import { MahjongAudioManager, type ActionVoice, type AudioMonitorEvent, type EffectSound } from "./audio-manager.js";
+import { MahjongAudioManager, type ActionVoice, type AudioMonitorEvent, type EffectSound, type VoiceGender } from "./audio-manager.js";
 import { PUBLIC_REPLAY_FORMAT, parsePublicReplay, type PublicReplayPlayer, type PublicReplayRecord } from "./public-replay.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
@@ -64,6 +64,10 @@ const effectsToggle = required<HTMLInputElement>("effects-toggle");
 const musicToggle = required<HTMLInputElement>("music-toggle");
 const voicePreviewButton = required<HTMLButtonElement>("voice-preview");
 const effectPreviewButton = required<HTMLButtonElement>("effect-preview");
+const genderFemaleButton = required<HTMLButtonElement>("gender-female");
+const genderMaleButton = required<HTMLButtonElement>("gender-male");
+const genderPreviewButton = required<HTMLButtonElement>("gender-preview");
+const voiceGenderGameSelect = required<HTMLSelectElement>("voice-gender-game");
 const fullscreenToggleButton = required<HTMLButtonElement>("fullscreen-toggle");
 const actionBanner = required<HTMLElement>("action-banner");
 const tableEffect = required<HTMLElement>("table-effect");
@@ -236,6 +240,16 @@ function handleMessage(message: ServerMessage): void {
     history.replaceState({}, "", "/");
     showLobby();
     showNotice("已退出房间");
+  } else if (message.type === "room_closed") {
+    clearPendingRequest();
+    localStorage.removeItem("mahjong-session");
+    saved = undefined;
+    snapshot = undefined;
+    history.replaceState({}, "", "/");
+    showLobby();
+    showNotice(`房间 ${message.roomCode} 已由管理员解散：${message.reason}`);
+  } else if (message.type === "room_announcement") {
+    showNotice(`管理员公告：${message.message}`);
   } else if (message.type === "pong") {
     setConnection("已连接", true);
   }
@@ -900,10 +914,35 @@ function showTableEffect(kind: TableEffectKind, seat: number | undefined): void 
   const label = document.createElement("strong");
   label.textContent = labels[kind];
   tableEffect.append(label);
+  spawnTableParticles(kind);
   tableEffectTimer = window.setTimeout(() => {
     tableEffect.className = "table-effect hidden";
     tableEffect.replaceChildren();
   }, kind === "hu" || kind === "zimo" ? 1_550 : 1_050);
+}
+
+function spawnTableParticles(kind: TableEffectKind): void {
+  const palette: Record<TableEffectKind, string[]> = {
+    chi: ["#9bd7ff", "#d7f0ff", "#6fb8ff"],
+    peng: ["#d7b7ff", "#ffe3b3", "#b78bff"],
+    gang: ["#8ff0ff", "#d4f8ff", "#4bc6ff"],
+    hu: ["#ffd36b", "#ff9d5c", "#fff0b3"],
+    zimo: ["#ffd36b", "#ff9d5c", "#fff0b3"],
+    round: ["#fff3c4", "#ffd36b", "#9bd7ff"],
+  };
+  const colors = palette[kind];
+  const count = kind === "hu" || kind === "zimo" ? 14 : 10;
+  for (let index = 0; index < count; index += 1) {
+    const particle = document.createElement("i");
+    particle.className = "fx-particle";
+    const angle = (Math.PI * 2 * index) / count + Math.random() * 0.35;
+    const distance = kind === "hu" || kind === "zimo" ? 100 + Math.random() * 45 : 64 + Math.random() * 36;
+    particle.style.setProperty("--dx", `${Math.cos(angle) * distance}px`);
+    particle.style.setProperty("--dy", `${Math.sin(angle) * distance}px`);
+    particle.style.setProperty("--fx-color", colors[index % colors.length]!);
+    particle.style.setProperty("--fx-scale", String(0.7 + Math.random() * 0.9));
+    tableEffect.append(particle);
+  }
 }
 
 function clearPendingRequest(): void {
@@ -1248,11 +1287,13 @@ async function exportPublicHistory(): Promise<void> {
 
 createButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
+  localStorage.setItem("mahjong-nickname", nameInput.value.trim());
   send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16 });
 });
 joinButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   if (!/^\d{6}$/.test(codeInput.value.trim())) return showNotice("请输入六位房间号");
+  localStorage.setItem("mahjong-nickname", nameInput.value.trim());
   send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value });
 });
 readyButton.addEventListener("click", () => {
@@ -1297,6 +1338,20 @@ effectPreviewButton.addEventListener("click", () => {
   audioManager.playAction("hu");
   audioManager.playEffect("win", 380);
   showTableEffect("hu", snapshot?.game?.viewerSeat);
+});
+for (const [button, gender] of [[genderFemaleButton, "female"], [genderMaleButton, "male"]] as const) {
+  button.addEventListener("click", () => {
+    audioManager.setGender(gender);
+    syncAudioSettingsUI();
+  });
+}
+genderPreviewButton.addEventListener("click", () => {
+  audioManager.activate();
+  audioManager.playTile("wan-1");
+});
+voiceGenderGameSelect.addEventListener("change", () => {
+  audioManager.setGender(voiceGenderGameSelect.value as VoiceGender);
+  syncAudioSettingsUI();
 });
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
 reconnectNowButton.addEventListener("click", forceReconnect);
@@ -1371,12 +1426,20 @@ function syncAudioSettingsUI(): void {
   voiceToggle.checked = settings.voice;
   effectsToggle.checked = settings.effects;
   musicToggle.checked = settings.music;
+  const gender = settings.gender;
+  genderFemaleButton.classList.toggle("active", gender === "female");
+  genderFemaleButton.setAttribute("aria-pressed", String(gender === "female"));
+  genderMaleButton.classList.toggle("active", gender === "male");
+  genderMaleButton.setAttribute("aria-pressed", String(gender === "male"));
+  voiceGenderGameSelect.value = gender;
   const enabled = settings.voice || settings.effects || settings.music;
   soundToggleButton.textContent = enabled ? "声" : "静";
   soundToggleButton.setAttribute("aria-label", enabled ? "声音设置，当前已开启" : "声音设置，当前已静音");
 }
 
 syncAudioSettingsUI();
+const savedNickname = localStorage.getItem("mahjong-nickname");
+if (savedNickname) nameInput.value = savedNickname;
 const invitedRoom = new URLSearchParams(location.search).get("room");
 if (invitedRoom && /^\d{6}$/.test(invitedRoom)) codeInput.value = invitedRoom;
 

@@ -1,6 +1,6 @@
-# 阿里云 ECS 临时联机测试部署记录
+# 阿里云 ECS 部署记录（IP 直连 + Redis + 进程守护）
 
-本文记录 Ubuntu 22.04 ECS 上已经走通的部署过程。当前方案用于多人联机测试，正式发布时应升级为后台进程、Nginx 和 HTTPS/WSS。
+当前方案使用公网 IP 直连 3000 端口，不配置域名。房间状态每 2 秒写入 Redis，服务由 PM2 或 systemd 守护，进程崩溃或服务器重启后会自动拉起并恢复房间。
 
 ## 1. 确认服务器环境
 
@@ -12,13 +12,13 @@ uname -m
 whoami
 ```
 
-本次服务器为 Ubuntu 22.04.5 LTS、x86_64、root 用户。
+本次目标服务器为 Ubuntu 22.04 LTS、x86_64、root 用户。
 
-## 2. 安装基础工具
+## 2. 安装基础工具与 Node.js
 
 ```bash
 apt update
-apt install -y git curl ca-certificates
+apt install -y git curl ca-certificates redis-server
 ```
 
 安装 nvm：
@@ -48,7 +48,37 @@ pnpm -v
 git --version
 ```
 
-## 3. 下载、安装并测试项目
+## 3. 启动并保护 Redis
+
+```bash
+systemctl enable --now redis-server
+redis-cli ping
+```
+
+应返回 `PONG`。给 Redis 设置密码并只允许本机访问：
+
+```bash
+redis-cli CONFIG SET requirepass '你的Redis密码'
+redis-cli CONFIG REWRITE
+systemctl restart redis-server
+redis-cli -a '你的Redis密码' ping
+```
+
+确认 Redis 没有监听公网：
+
+```bash
+ss -lntp | grep 6379
+```
+
+正常情况下只应看到 `127.0.0.1:6379`。不需要在安全组或 UFW 中放行 6379。项目读取的地址为：
+
+```text
+redis://:你的Redis密码@127.0.0.1:6379
+```
+
+如果不设密码，则为 `redis://127.0.0.1:6379`。
+
+## 4. 下载、安装并测试项目
 
 ```bash
 cd /opt
@@ -56,181 +86,163 @@ git clone https://github.com/lzy271713290/CMCCmahjong.git
 cd /opt/CMCCmahjong/mahjong-h5
 pnpm install --frozen-lockfile
 pnpm test
+pnpm run build
 ```
 
-七十四项自动测试全部通过后，启动服务：
+自动测试应全部通过，当前版本为 `persist-control-v17`。
+
+## 5. 使用 PM2 启动并开机自启
+
+仓库已提供 `mahjong-h5/ecosystem.config.cjs`。安装 PM2：
+
+```bash
+npm install -g pm2
+```
+
+启动服务：
 
 ```bash
 cd /opt/CMCCmahjong/mahjong-h5
-pnpm start
+ADMIN_TOKEN=你的后台令牌 REDIS_URL=redis://:你的Redis密码@127.0.0.1:6379 pm2 start ecosystem.config.cjs
+pm2 save
+pm2 startup systemd
 ```
 
-看到以下内容表示程序启动成功：
-
-```text
-麻将联机样板已启动：http://localhost:3000
-```
-
-后台管理默认关闭。如需启用，在启动前设置 `ADMIN_TOKEN`：
+`pm2 startup systemd` 会打印一条命令，复制执行一次即可开机自启。查看状态：
 
 ```bash
-ADMIN_TOKEN=你的后台令牌 pnpm start
+pm2 status
+pm2 logs cmcc-mahjong --lines 100
 ```
 
-启动后访问 `http://服务器公网IP:3000/admin?token=你的后台令牌`；未配置令牌时 `/admin` 返回 503。
+### 使用 systemd 的替代方案
 
-当前是前台运行，终端不能关闭；按 `Ctrl+C` 会停止服务并清空内存中的房间。
+仓库已提供 `deploy/cmccmahjong.service`。先编辑其中的 `ADMIN_TOKEN` 和 Redis 地址：
 
-## 4. Ubuntu 防火墙放行测试端口
+```bash
+cp /opt/CMCCmahjong/deploy/cmccmahjong.service /etc/systemd/system/cmccmahjong.service
+nano /etc/systemd/system/cmccmahjong.service
+systemctl daemon-reload
+systemctl enable --now cmccmahjong
+```
 
-检查 UFW：
+两者任选其一，不要同时启动两套守护进程，避免端口冲突。
+
+## 6. 放行公网 3000 端口
+
+当前不需要域名，直接使用公网 IP 访问。检查 UFW：
 
 ```bash
 ufw status
+ufw allow 3000/tcp comment 'CMCC mahjong'
 ```
 
-临时放行 TCP 3000：
-
-```bash
-ufw allow 3000/tcp comment 'CMCC mahjong temporary test'
-```
-
-检查本机服务：
-
-```bash
-curl -I http://127.0.0.1:3000
-ss -lntp | grep ':3000'
-```
-
-应看到 HTTP 200，并且 `0.0.0.0:3000` 处于监听状态。
-
-## 5. 阿里云安全组放行测试端口
-
-在阿里云控制台进入：云服务器 ECS → 实例 → 对应安全组 → 入方向规则 → 增加规则。
-
-填写：
+在阿里云控制台进入：云服务器 ECS → 实例 → 对应安全组 → 入方向规则 → 增加规则，放行：
 
 ```text
 授权策略：允许
 协议类型：自定义 TCP
 目的端口：3000/3000
 授权对象：0.0.0.0/0
-描述：麻将临时联机测试
+描述：麻将公网联机
 ```
 
-保存后，手机使用移动网络访问：
+## 7. 验收当前版本
 
-```text
-http://服务器公网IP:3000
-```
-
-## 6. 四人联机测试方法
-
-1. 一名玩家创建房间，将六位房间号发给朋友。
-2. 另外三名玩家输入昵称和房间号加入。
-3. 所有人点击准备，房主点击开始游戏。
-4. 测试真人联机时不要点击“一键补齐测试玩家”，否则测试玩家会占满座位。
-5. 分别测试刷新页面、切换网络、短暂离线后能否恢复座位。
-
-## 7. 停止测试与关闭端口
-
-在运行服务的终端按 `Ctrl+C`。然后关闭 Ubuntu 防火墙规则：
-
-```bash
-ufw delete allow 3000/tcp
-```
-
-同时在阿里云安全组中删除或禁用 TCP 3000 入方向规则。不要长期将测试端口暴露给 `0.0.0.0/0`。
-
-## 8. 后续更新服务器代码
-
-先停止正在运行的服务，然后执行：
-
-```bash
-cd /opt/CMCCmahjong
-git pull
-cd mahjong-h5
-pnpm install --frozen-lockfile
-pnpm test
-pnpm start
-```
-
-如果依赖没有变化，`pnpm install` 会很快完成。服务重启后，原来只存在内存中的房间不会保留。
-
-## 9. 正式部署待办
-
-- 创建非 root 运行用户。
-- 使用 PM2 或 systemd 保持服务后台运行和开机启动。
-- 使用 Nginx 反向代理 WebSocket。
-- 配置域名、HTTPS 和 WSS。
-- 仅对公网开放 80/443，关闭直接暴露的 3000 端口。
-- 房间状态迁移到 Redis，长期数据使用数据库保存。
-
-## 10. 排查房间问题时提取日志
-
-服务启动后会同时将结构化日志输出到终端和以下文件：
-
-```text
-/opt/CMCCmahjong/mahjong-h5/logs/server.jsonl
-```
-
-查看最近 200 行：
-
-```bash
-cd /opt/CMCCmahjong/mahjong-h5
-tail -n 200 logs/server.jsonl
-```
-
-只看失败请求：
-
-```bash
-grep '"event":"request_failed"' logs/server.jsonl | tail -n 50
-```
-
-只看服务启动、创建房间和加入房间：
-
-```bash
-grep -E '"event":"(server_started|room_created|room_joined|room_reconnected)"' logs/server.jsonl | tail -n 100
-```
-
-验证最小牌局模型是否成功初始化：
-
-```bash
-grep '"event":"game_model_initialized"' logs/server.jsonl | tail -n 20
-```
-
-正常 JSON 日志应包含 `"modelVersion":"admin-monitor-v16"`、`"wallRemaining":83` 和 `"totalTiles":136`；`handTileCounts` 中应恰好一家14张、三家13张。日志不会记录具体手牌或暗杠牌面。
-
-无需创建房间即可确认当前服务实例和版本：
+无需创建房间即可确认版本、实例和持久化模式：
 
 ```bash
 curl -s http://127.0.0.1:3000/healthz
 ```
 
-应返回 `"ok":true`、`"modelVersion":"admin-monitor-v16"`、8位 `instanceId` 和运行秒数。
+应返回 `"modelVersion":"persist-control-v17"`、`"persistence":"redis"`、8位 `instanceId` 和运行秒数。
 
-验证私有发牌、重连恢复、出牌、自动响应与回合推进监控事件：
+后台管理使用令牌保护：
 
 ```bash
-grep -E '"event":"(private_hands_distributed|private_hand_restored|tile_discarded|reaction_options_calculated|reaction_response_received|reaction_window_resolved|meld_claimed|turn_operation_performed|rob_kong_options_calculated|kong_completed|score_settled|round_ended|round_started|early_settlement_requested|early_settlement_response|match_ended|turn_timeout_resolved|reaction_timeout_resolved|auto_management_started|auto_management_ended|governance_tick_failed|test_player_auto_discarded|test_players_removed|room_left|public_timeline_checkpoint|turn_advanced)"' logs/server.jsonl | tail -n 100
+ADMIN_TOKEN=你的后台令牌 node scripts/admin-smoke.mjs http://127.0.0.1:3000 你的后台令牌 persist-control-v17
 ```
 
-从开发电脑对公网服务执行完整 WebSocket 冒烟测试：
+从公司电脑对公网服务执行完整冒烟：
 
 ```bash
 cd mahjong-h5
-node scripts/websocket-smoke.mjs ws://服务器公网IP:3000/ws admin-monitor-v16
-node scripts/admin-smoke.mjs http://服务器公网IP:3000 你的后台令牌 admin-monitor-v16
+node scripts/websocket-smoke.mjs ws://服务器公网IP:3000/ws persist-control-v17
+node scripts/admin-smoke.mjs http://服务器公网IP:3000 你的后台令牌 persist-control-v17
+node scripts/full-round-smoke.mjs ws://服务器公网IP:3000/ws persist-control-v17
 ```
 
-命令退出码为0，并返回 `"modelVersion":"admin-monitor-v16"`、`"matchRounds":16`、`"gamePhase":"playing"`、局中解散暂停/拒绝恢复、两轮牌墙递减、公共记录隐私，以及 `voiceAsset`、`musicAsset`、`effectAsset`、`audioModule`、`replayModule` 和 `health` 检查结果，表示核心联机与音画资源路由通过。
+后台冒烟会额外验证管理员公告送达和强制解散后房间清空。手机访问：
 
-执行四真人完整一局、投票中断线恢复和最终结算验收：
+```text
+http://服务器公网IP:3000
+```
+
+## 8. 验证 Redis 持久化与重启恢复
+
+先创建一个正在进行的房间并进入牌局，然后执行：
 
 ```bash
-node scripts/full-round-smoke.mjs ws://服务器公网IP:3000/ws admin-monitor-v16
+pm2 restart cmcc-mahjong
 ```
 
-退出码为0，并返回 `"discardCount":84`、`"roundReason":"wall_exhausted"`、`"wallRemaining":0`、`"reconnectVoteRestored":true`、`"matchEndReason":"early_agreement"`、`"rankingCount":4`、`"publicActionCount":92` 和 `"publicActionsPrivateDataFree":true`，表示朋友临时联网版的完整网络主链路和公共记录通过。
+重启后登录同一房间的玩家应能直接恢复原座位；后台房间列表应继续显示该房间。Redis 中的房间数据保存在键 `cmcc:mahjong:rooms:v1`：
 
-日志包含服务实例 ID、进程 PID、房间号、人数、操作和错误码，不记录玩家身份令牌。把相关行复制出来即可协助定位“服务是否重启”“请求是否进入同一实例”“房间为何不存在”等问题。
+```bash
+redis-cli -a '你的Redis密码' --no-auth-warning GET cmcc:mahjong:rooms:v1 | head -c 300
+```
+
+服务每 2 秒保存一次快照，因此极端情况下崩溃最多丢失约 2 秒内的房间操作。未配置 `REDIS_URL` 时仍可运行，但房间只保存在内存中。
+
+## 9. 后台管理操作
+
+后台页面：`http://服务器公网IP:3000/admin?token=你的后台令牌`。
+
+- 概览：房间数、进行中/等待中、在线真人、测试玩家、WebSocket 连接数。
+- 房间列表：状态、人数、局数、牌墙、阶段、动作数、房主。
+- 房间详情：玩家连接/托管状态、公开牌桌状态、最近公共动作。
+- 管理操作：向房间内玩家发送公告；强制解散房间，所有玩家会收到提示并返回大厅。
+
+接口也支持直接调用：
+
+```bash
+curl -X POST 'http://127.0.0.1:3000/api/admin/rooms/123456/actions?token=你的后台令牌'   -H 'content-type: application/json'   -d '{"action":"announce","message":"维护公告"}'
+
+curl -X POST 'http://127.0.0.1:3000/api/admin/rooms/123456/actions?token=你的后台令牌'   -H 'content-type: application/json'   -d '{"action":"force_close","reason":"维护强制解散"}'
+```
+
+## 10. 日志与排障
+
+服务日志仍写入 `/opt/CMCCmahjong/mahjong-h5/logs/server.jsonl`。PM2 另写 `logs/pm2-out.log` 和 `logs/pm2-error.log`：
+
+```bash
+cd /opt/CMCCmahjong/mahjong-h5
+tail -n 200 logs/server.jsonl
+pm2 logs cmcc-mahjong --lines 200
+```
+
+查看 Redis 连接与房间恢复事件：
+
+```bash
+grep -E '"event":"(redis_connected|rooms_restored|room_persist_failed|redis_bootstrap_failed|admin_force_close|admin_announce)"' logs/server.jsonl | tail -n 100
+```
+
+## 11. 更新服务器代码
+
+```bash
+cd /opt/CMCCmahjong
+git pull --ff-only origin main
+cd mahjong-h5
+pnpm install --frozen-lockfile
+pnpm test
+pnpm run build
+pm2 restart cmcc-mahjong --update-env
+```
+
+如果使用 systemd：
+
+```bash
+systemctl restart cmccmahjong
+```
+
+重启不会清空 Redis 中的房间；已保存的房间会在服务启动时自动恢复。
