@@ -54,9 +54,17 @@
             <button id="rules-game" class="hud-button" type="button" aria-label="查看规则" title="查看规则">规</button>
             <button id="history-game" class="hud-button" type="button" aria-label="查看牌局记录" title="查看牌局记录">记</button>
             <button id="request-dissolve" class="hud-button" type="button" aria-label="申请解散牌局" title="申请解散牌局">散</button>
-            <button id="sound-toggle" class="hud-button" type="button" aria-label="关闭音效" title="音效">声</button>
+            <button id="sound-toggle" class="hud-button" type="button" aria-label="声音设置" aria-expanded="false" title="声音设置">声</button>
             <button id="fullscreen-toggle" class="hud-button" type="button" aria-label="全屏横屏" title="全屏横屏">全</button>
             <span id="game-connection" class="status">连接中</span>
+          </div>
+          <div id="audio-settings" class="audio-settings hidden" role="dialog" aria-label="声音设置">
+            <strong>声音设置</strong>
+            <label><input id="voice-toggle" type="checkbox" />真人语音报牌</label>
+            <label><input id="effects-toggle" type="checkbox" />操作与结算音效</label>
+            <label><input id="music-toggle" type="checkbox" />牌桌背景音乐</label>
+            <div class="audio-preview"><button id="voice-preview" type="button">试听报牌</button><button id="effect-preview" type="button">预览胡牌</button></div>
+            <small>首次点击牌桌后浏览器才允许播放</small>
           </div>
         </div>
 
@@ -83,6 +91,7 @@
 
         <div id="operation-panel" class="operation-panel hidden" aria-label="可选操作"></div>
         <div id="action-banner" class="action-banner hidden" aria-live="assertive"></div>
+        <div id="table-effect" class="table-effect hidden" aria-hidden="true"></div>
         <div id="score-summary" class="score-summary hidden" aria-live="polite"></div>
         <div class="self-area">
           <div id="self-hand" class="self-hand" aria-label="我的手牌"></div>
@@ -107,6 +116,7 @@
           <section><h3>响应顺序</h3><p>胡优先于杠、碰、吃；只有弃牌者的下家能吃。多人同时可胡时按当前规则结算。</p></section>
           <section><h3>本项目规则</h3><p>支持普通胡、七对、自摸、点炮、明杠、暗杠、加杠、抢杠胡，以及中发白和幺鸡特殊杠、涨毛。</p></section>
           <section><h3>结算与断线</h3><p>任意玩家可申请解散，四人一致同意才结束；未完成局不计局数，已结算杠分保留。掉线90秒进入托管，重连立即接管。</p></section>
+          <section><h3>声音与特效</h3><p>牌桌提供34张牌真人语音、吃碰杠胡报音、背景音乐和结算特效；点击右上角“声”可分别开关。</p></section>
           <section><h3>房间管理</h3><p>等待时可退出，房主退出会自动转给下一位真人；误加测试玩家可一键移除。牌局进行中请勿主动退出。</p></section>
         </div>
         <button id="rules-close" class="primary" type="button">知道了，开始打牌</button>

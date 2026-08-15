@@ -1,10 +1,21 @@
 import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import { MahjongAudioManager, type ActionVoice, type AudioMonitorEvent, type EffectSound } from "./audio-manager.js";
 import { PUBLIC_REPLAY_FORMAT, parsePublicReplay, type PublicReplayPlayer, type PublicReplayRecord } from "./public-replay.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
 type TablePosition = "bottom" | "right" | "top" | "left";
 type FeedbackKind = "discard" | "turn" | "meld" | "hu" | "round" | "vote" | "system";
-type Feedback = { text: string; kind: FeedbackKind };
+type TableEffectKind = "chi" | "peng" | "gang" | "hu" | "zimo" | "round";
+type Feedback = {
+  text: string;
+  kind: FeedbackKind;
+  tile?: TileCode;
+  actionVoice?: ActionVoice;
+  sound?: EffectSound;
+  resultSound?: "win" | "lose";
+  visual?: TableEffectKind;
+  seat?: number;
+};
 type HistorySource = {
   roomCode: string;
   modelVersion?: string;
@@ -47,8 +58,15 @@ const connection = required<HTMLElement>("connection");
 const gameConnection = required<HTMLElement>("game-connection");
 const shareRoomButton = required<HTMLButtonElement>("share-room");
 const soundToggleButton = required<HTMLButtonElement>("sound-toggle");
+const audioSettings = required<HTMLElement>("audio-settings");
+const voiceToggle = required<HTMLInputElement>("voice-toggle");
+const effectsToggle = required<HTMLInputElement>("effects-toggle");
+const musicToggle = required<HTMLInputElement>("music-toggle");
+const voicePreviewButton = required<HTMLButtonElement>("voice-preview");
+const effectPreviewButton = required<HTMLButtonElement>("effect-preview");
 const fullscreenToggleButton = required<HTMLButtonElement>("fullscreen-toggle");
 const actionBanner = required<HTMLElement>("action-banner");
+const tableEffect = required<HTMLElement>("table-effect");
 const networkOverlay = required<HTMLElement>("network-overlay");
 const networkDetail = required<HTMLElement>("network-detail");
 const reconnectNowButton = required<HTMLButtonElement>("reconnect-now");
@@ -89,9 +107,9 @@ let connectionGeneration = 0;
 let reconnectAttempts = 0;
 let pendingRequest: { type: string; timeout: number } | undefined;
 let feedbackTimer: number | undefined;
+let tableEffectTimer: number | undefined;
 const feedbackQueue: Feedback[] = [];
-let soundEnabled = localStorage.getItem("mahjong-sound") !== "off";
-let audioContext: AudioContext | undefined;
+const audioManager = new MahjongAudioManager(logAudioMonitor);
 let lastServerMessageAt = Date.now();
 let reconnectFeedbackPending = false;
 let importedReplay: PublicReplayRecord | undefined;
@@ -99,6 +117,13 @@ let historySource: HistorySource | undefined;
 let historyCursor = 0;
 let historyPlaybackTimer: number | undefined;
 let countdownTimer: number | undefined;
+let lastCountdownAlarmKey = "";
+
+function logAudioMonitor(event: AudioMonitorEvent): void {
+  const payload = { timestamp: new Date().toISOString(), ...event };
+  if (event.event === "audio_asset_failed") console.warn(JSON.stringify(payload));
+  else console.info(JSON.stringify(payload));
+}
 
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -220,6 +245,7 @@ function render(next: RoomSnapshot): void {
   snapshot = next;
   const me = next.players.find((player) => player.id === saved?.playerId);
   const isPlaying = next.phase === "playing" && Boolean(next.game);
+  audioManager.setInGame(isPlaying && next.match.status !== "completed");
   document.body.classList.toggle("in-game", isPlaying);
   lobby.classList.add("hidden");
   room.classList.toggle("hidden", isPlaying);
@@ -440,6 +466,15 @@ function updateActionCountdown(): void {
   const remaining = !deadline || paused ? undefined : Math.max(0, Math.ceil((deadline - Date.now()) / 1_000));
   actionCountdown.textContent = remaining === undefined ? "--" : String(remaining);
   actionCountdown.parentElement?.classList.toggle("urgent", remaining !== undefined && remaining <= 5);
+  if (remaining === undefined || remaining !== 5) {
+    if (remaining === undefined) lastCountdownAlarmKey = "";
+    return;
+  }
+  const alarmKey = String(deadline);
+  if (alarmKey !== lastCountdownAlarmKey) {
+    lastCountdownAlarmKey = alarmKey;
+    audioManager.playEffect("timeup");
+  }
 }
 
 function renderDissolveVote(next: RoomSnapshot, me: PlayerView | undefined): void {
@@ -730,15 +765,19 @@ function tileLabel(code: TileCode): string {
 function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomSnapshot): void {
   const before = previous?.game;
   const after = next.game;
-  if (!before || !after || previous?.roomCode !== next.roomCode) return;
+  if (!after || (previous && previous.roomCode !== next.roomCode)) return;
+  if (!before) {
+    enqueueFeedback({ text: `第${after.roundNumber}局开始 · ${playerName(next, after.dealerSeat)}坐庄`, kind: "round", sound: "shuffle", visual: "round", seat: after.dealerSeat });
+    return;
+  }
   if (after.roundNumber !== before.roundNumber) {
-    enqueueFeedback({ text: `第${after.roundNumber}局开始 · ${playerName(next, after.dealerSeat)}坐庄`, kind: "round" });
+    enqueueFeedback({ text: `第${after.roundNumber}局开始 · ${playerName(next, after.dealerSeat)}坐庄`, kind: "round", sound: "shuffle", visual: "round", seat: after.dealerSeat });
     return;
   }
 
   if (after.discards.length > before.discards.length) {
     for (const discard of after.discards.slice(before.discards.length).slice(-4)) {
-      enqueueFeedback({ text: `${playerName(next, discard.seat)} 打出 ${tileLabel(discard.tile)}`, kind: "discard" });
+      enqueueFeedback({ text: `${playerName(next, discard.seat)} 打出 ${tileLabel(discard.tile)}`, kind: "discard", tile: discard.tile, seat: discard.seat });
     }
     document.querySelector(".discard-tile.latest")?.classList.add("new-discard");
   }
@@ -746,21 +785,31 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
   const oldMelds = new Map(before.melds.map((meld, index) => [`${meld.seat}:${index}`, JSON.stringify(meld)]));
   after.melds.forEach((meld, index) => {
     if (oldMelds.get(`${meld.seat}:${index}`) === JSON.stringify(meld)) return;
-    const label = meld.kind === "chi"
-      ? "吃"
-      : meld.kind === "peng"
-        ? "碰"
-        : meld.kind === "special_gang"
-          ? meld.growthCount ? "涨毛" : "特殊杠"
-          : "杠";
-    enqueueFeedback({ text: `${playerName(next, meld.seat)} ${label}`, kind: "meld" });
+    const isChi = meld.kind === "chi";
+    const isPeng = meld.kind === "peng";
+    const label = isChi ? "吃" : isPeng ? "碰" : meld.kind === "special_gang" ? meld.growthCount ? "涨毛" : "特殊杠" : "杠";
+    enqueueFeedback({
+      text: `${playerName(next, meld.seat)} ${label}`,
+      kind: "meld",
+      actionVoice: isChi ? "chi" : isPeng ? "peng" : "gang",
+      visual: isChi ? "chi" : isPeng ? "peng" : "gang",
+      seat: meld.seat,
+    });
   });
 
   if (!before.roundResult && after.roundResult) {
     if (after.roundResult.winnerSeats.length > 0) {
       const winners = after.roundResult.winnerSeats.map((seat) => playerName(next, seat)).join("、");
       const label = after.roundResult.reason === "self_draw_hu" ? "自摸" : after.roundResult.reason === "rob_kong_hu" ? "抢杠胡" : "胡牌";
-      enqueueFeedback({ text: `${winners} ${label}`, kind: "hu" });
+      const viewerWon = after.viewerSeat !== undefined && after.roundResult.winnerSeats.includes(after.viewerSeat);
+      enqueueFeedback({
+        text: `${winners} ${label}`,
+        kind: "hu",
+        actionVoice: "hu",
+        resultSound: viewerWon ? "win" : "lose",
+        visual: after.roundResult.reason === "self_draw_hu" ? "zimo" : "hu",
+        seat: after.roundResult.winnerSeats[0],
+      });
     } else if (after.roundResult.reason === "dissolved") {
       enqueueFeedback({ text: "全员同意，当前未完成局已解散", kind: "round" });
     } else {
@@ -781,7 +830,7 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
 
   const viewerSeat = after.viewerSeat;
   if (viewerSeat !== undefined && before.turnSeat !== viewerSeat && after.turnSeat === viewerSeat && after.stage === "awaiting_discard") {
-    enqueueFeedback({ text: "轮到你出牌", kind: "turn" });
+    enqueueFeedback({ text: "轮到你出牌", kind: "turn", sound: "select", seat: viewerSeat });
     navigator.vibrate?.(80);
   }
 }
@@ -806,47 +855,55 @@ function showNextFeedback(): void {
   }
   actionBanner.textContent = feedback.text;
   actionBanner.className = `action-banner feedback-${feedback.kind}`;
-  playSound(feedback.kind);
+  playFeedbackAudio(feedback);
+  if (feedback.visual) showTableEffect(feedback.visual, feedback.seat);
   if (feedback.kind === "hu") navigator.vibrate?.([100, 60, 160]);
   feedbackTimer = window.setTimeout(showNextFeedback, feedback.kind === "hu" ? 1_600 : 900);
 }
 
-function ensureAudioContext(): AudioContext | undefined {
-  if (!soundEnabled) return undefined;
-  try {
-    audioContext ??= new AudioContext();
-    void audioContext.resume();
-    return audioContext;
-  } catch {
-    return undefined;
+function playFeedbackAudio(feedback: Feedback): void {
+  if (feedback.tile) {
+    audioManager.playEffect("discard");
+    window.setTimeout(() => audioManager.playTile(feedback.tile!), 55);
+  }
+  if (feedback.actionVoice) audioManager.playAction(feedback.actionVoice);
+  if (feedback.sound) {
+    audioManager.playEffect(feedback.sound);
+    if (feedback.sound === "shuffle") audioManager.playEffect("deal", 380);
+  }
+  if (feedback.resultSound) audioManager.playEffect(feedback.resultSound, 420);
+  if (!feedback.tile && !feedback.actionVoice && !feedback.sound && (feedback.kind === "vote" || feedback.kind === "system")) {
+    audioManager.playEffect("ui");
   }
 }
 
-function playSound(kind: FeedbackKind): void {
-  const context = ensureAudioContext();
-  if (!context) return;
-  const tones: Record<FeedbackKind, number[]> = {
-    discard: [360],
-    turn: [520, 660],
-    meld: [410, 520],
-    hu: [523, 659, 784],
-    round: [330, 440],
-    vote: [440],
-    system: [600],
+function showTableEffect(kind: TableEffectKind, seat: number | undefined): void {
+  window.clearTimeout(tableEffectTimer);
+  const effectAssets: Partial<Record<TableEffectKind, string>> = {
+    peng: "/assets/babykylin/efx/peng_glow2.png",
+    gang: "/assets/babykylin/efx/gang_glow2.png",
+    hu: "/assets/babykylin/efx/hu_glow4.png",
+    zimo: "/assets/babykylin/efx/zimo_glow2.png",
   };
-  tones[kind].forEach((frequency, index) => {
-    const oscillator = context.createOscillator();
-    const gain = context.createGain();
-    const start = context.currentTime + index * 0.09;
-    oscillator.type = kind === "hu" ? "triangle" : "sine";
-    oscillator.frequency.value = frequency;
-    gain.gain.setValueAtTime(0.0001, start);
-    gain.gain.exponentialRampToValueAtTime(kind === "hu" ? 0.12 : 0.06, start + 0.015);
-    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.14);
-    oscillator.connect(gain).connect(context.destination);
-    oscillator.start(start);
-    oscillator.stop(start + 0.16);
-  });
+  const labels: Record<TableEffectKind, string> = { chi: "吃", peng: "碰", gang: "杠", hu: "胡", zimo: "自摸", round: "开局" };
+  const viewerSeat = snapshot?.game?.viewerSeat ?? 0;
+  const position = seat === undefined ? "center" : positionForSeat(seat, viewerSeat);
+  tableEffect.replaceChildren();
+  tableEffect.className = `table-effect effect-${kind} effect-at-${position}`;
+  const asset = effectAssets[kind];
+  if (asset) {
+    const image = document.createElement("img");
+    image.src = asset;
+    image.alt = "";
+    tableEffect.append(image);
+  }
+  const label = document.createElement("strong");
+  label.textContent = labels[kind];
+  tableEffect.append(label);
+  tableEffectTimer = window.setTimeout(() => {
+    tableEffect.className = "table-effect hidden";
+    tableEffect.replaceChildren();
+  }, kind === "hu" || kind === "zimo" ? 1_550 : 1_050);
 }
 
 function clearPendingRequest(): void {
@@ -942,6 +999,8 @@ async function toggleFullscreen(): Promise<void> {
 
 function showLobby(): void {
   snapshot = undefined;
+  audioManager.setInGame(false);
+  setAudioSettingsVisible(false);
   document.body.classList.remove("in-game");
   room.classList.add("hidden");
   gameScreen.classList.add("hidden");
@@ -1206,7 +1265,8 @@ fillTestButton.addEventListener("click", () => {
 });
 leaveRoomButton.addEventListener("click", returnToLobby);
 startButton.addEventListener("click", () => {
-  ensureAudioContext();
+  audioManager.activate();
+  audioManager.setInGame(true);
   send({ type: "start_game" });
 });
 copyButton.addEventListener("click", async () => {
@@ -1220,11 +1280,23 @@ copyButton.addEventListener("click", async () => {
 });
 shareRoomButton.addEventListener("click", () => shareCurrentRoom());
 soundToggleButton.addEventListener("click", () => {
-  soundEnabled = !soundEnabled;
-  localStorage.setItem("mahjong-sound", soundEnabled ? "on" : "off");
-  soundToggleButton.textContent = soundEnabled ? "声" : "静";
-  soundToggleButton.setAttribute("aria-label", soundEnabled ? "关闭音效" : "开启音效");
-  if (soundEnabled) playSound("system");
+  setAudioSettingsVisible(audioSettings.classList.contains("hidden"));
+});
+for (const toggle of [voiceToggle, effectsToggle, musicToggle]) {
+  toggle.addEventListener("change", () => {
+    audioManager.updateSettings({ voice: voiceToggle.checked, effects: effectsToggle.checked, music: musicToggle.checked });
+    syncAudioSettingsUI();
+  });
+}
+voicePreviewButton.addEventListener("click", () => {
+  audioManager.activate();
+  audioManager.playTile("wan-1");
+});
+effectPreviewButton.addEventListener("click", () => {
+  audioManager.activate();
+  audioManager.playAction("hu");
+  audioManager.playEffect("win", 380);
+  showTableEffect("hu", snapshot?.game?.viewerSeat);
 });
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
 reconnectNowButton.addEventListener("click", forceReconnect);
@@ -1272,6 +1344,7 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape") {
     setRulesVisible(false);
     setHistoryVisible(false);
+    setAudioSettingsVisible(false);
   }
 });
 window.addEventListener("online", () => {
@@ -1280,10 +1353,30 @@ window.addEventListener("online", () => {
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && socket?.readyState !== WebSocket.OPEN) forceReconnect();
 });
-document.addEventListener("pointerdown", () => ensureAudioContext(), { once: true });
+document.addEventListener("pointerdown", () => audioManager.activate(), { once: true });
+document.addEventListener("click", (event) => {
+  const target = event.target as HTMLElement;
+  if (target.closest("button")) audioManager.playEffect("ui");
+  if (!target.closest("#audio-settings") && !target.closest("#sound-toggle")) setAudioSettingsVisible(false);
+});
 
-soundToggleButton.textContent = soundEnabled ? "声" : "静";
-soundToggleButton.setAttribute("aria-label", soundEnabled ? "关闭音效" : "开启音效");
+function setAudioSettingsVisible(visible: boolean): void {
+  audioSettings.classList.toggle("hidden", !visible);
+  soundToggleButton.classList.toggle("active", visible);
+  soundToggleButton.setAttribute("aria-expanded", String(visible));
+}
+
+function syncAudioSettingsUI(): void {
+  const settings = audioManager.getSettings();
+  voiceToggle.checked = settings.voice;
+  effectsToggle.checked = settings.effects;
+  musicToggle.checked = settings.music;
+  const enabled = settings.voice || settings.effects || settings.music;
+  soundToggleButton.textContent = enabled ? "声" : "静";
+  soundToggleButton.setAttribute("aria-label", enabled ? "声音设置，当前已开启" : "声音设置，当前已静音");
+}
+
+syncAudioSettingsUI();
 const invitedRoom = new URLSearchParams(location.search).get("room");
 if (invitedRoom && /^\d{6}$/.test(invitedRoom)) codeInput.value = invitedRoom;
 

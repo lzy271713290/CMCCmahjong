@@ -24,6 +24,7 @@ const mimeTypes: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".mp3": "audio/mpeg",
 };
 
 const server = createServer((request, response) => {
@@ -35,6 +36,7 @@ const server = createServer((request, response) => {
   }
   let filePath: string | undefined;
   if (pathname === "/app.js") filePath = join(projectRoot, "dist/client/src/app.js");
+  else if (pathname === "/audio-manager.js") filePath = join(projectRoot, "dist/client/src/audio-manager.js");
   else if (pathname === "/public-replay.js") filePath = join(projectRoot, "dist/client/src/public-replay.js");
   else if (pathname === "/styles.css") filePath = join(projectRoot, "client/public/styles.css");
   else if (pathname === "/" || pathname === "/index.html") filePath = join(projectRoot, "client/public/index.html");

@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { findDiscardReactionOptions } from "../dist/server/src/game-model.js";
 
 const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
-const expectedVersion = process.argv[3] ?? "governance-ready-v13";
+const expectedVersion = process.argv[3] ?? "audio-effects-v14";
 const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
 
 function open() {
@@ -162,13 +162,24 @@ const playingRestoredSocket = await open();
 const playingRestoredWait = next(playingRestoredSocket, "session");
 playingRestoredSocket.send(JSON.stringify({ type: "reconnect", roomCode: created.roomCode, playerToken: joined.playerToken }));
 const playingRestored = await playingRestoredWait;
-const [tileAssetResponse, tableAssetResponse, replayModuleResponse] = await Promise.all([
+const [tileAssetResponse, tableAssetResponse, voiceAssetResponse, musicAssetResponse, effectAssetResponse, replayModuleResponse, audioModuleResponse] = await Promise.all([
   fetch(`${httpBaseUrl}/assets/babykylin/MJ/bottom/Z_bottom.png`),
   fetch(`${httpBaseUrl}/assets/babykylin/table/mahjong_table.jpg`),
+  fetch(`${httpBaseUrl}/assets/babykylin/sounds/nv/11.mp3`),
+  fetch(`${httpBaseUrl}/assets/babykylin/sounds/bgFight.mp3`),
+  fetch(`${httpBaseUrl}/assets/babykylin/efx/hu_glow4.png`),
   fetch(`${httpBaseUrl}/public-replay.js`),
+  fetch(`${httpBaseUrl}/audio-manager.js`),
 ]);
-const [tileAsset, tableAsset] = await Promise.all([tileAssetResponse.arrayBuffer(), tableAssetResponse.arrayBuffer()]);
+const [tileAsset, tableAsset, voiceAsset, musicAsset, effectAsset] = await Promise.all([
+  tileAssetResponse.arrayBuffer(),
+  tableAssetResponse.arrayBuffer(),
+  voiceAssetResponse.arrayBuffer(),
+  musicAssetResponse.arrayBuffer(),
+  effectAssetResponse.arrayBuffer(),
+]);
 const replayModule = await replayModuleResponse.text();
+const audioModule = await audioModuleResponse.text();
 const healthResponse = await fetch(`${httpBaseUrl}/healthz`);
 const health = await healthResponse.json();
 
@@ -202,7 +213,11 @@ const result = {
   playingHandRestored: JSON.stringify(playingRestored.snapshot.game?.selfHand) === JSON.stringify(originalPlayingHand),
   tileAsset: { contentType: tileAssetResponse.headers.get("content-type"), bytes: tileAsset.byteLength },
   tableAsset: { contentType: tableAssetResponse.headers.get("content-type"), bytes: tableAsset.byteLength },
+  voiceAsset: { contentType: voiceAssetResponse.headers.get("content-type"), bytes: voiceAsset.byteLength },
+  musicAsset: { contentType: musicAssetResponse.headers.get("content-type"), bytes: musicAsset.byteLength },
+  effectAsset: { contentType: effectAssetResponse.headers.get("content-type"), bytes: effectAsset.byteLength },
   replayModule: { status: replayModuleResponse.status, contentType: replayModuleResponse.headers.get("content-type"), parserExported: replayModule.includes("export function parsePublicReplay") },
+  audioModule: { status: audioModuleResponse.status, contentType: audioModuleResponse.headers.get("content-type"), managerExported: audioModule.includes("export class MahjongAudioManager") },
   health: { status: healthResponse.status, ok: health.ok, modelVersion: health.modelVersion, instanceIdLength: health.instanceId?.length },
 };
 console.log(JSON.stringify(result));
@@ -242,9 +257,18 @@ if (
   result.tileAsset.bytes < 100_000 ||
   result.tableAsset.contentType !== "image/jpeg" ||
   result.tableAsset.bytes < 100_000 ||
+  result.voiceAsset.contentType !== "audio/mpeg" ||
+  result.voiceAsset.bytes < 1_000 ||
+  result.musicAsset.contentType !== "audio/mpeg" ||
+  result.musicAsset.bytes < 900_000 ||
+  result.effectAsset.contentType !== "image/png" ||
+  result.effectAsset.bytes < 100_000 ||
   result.replayModule.status !== 200 ||
   !result.replayModule.contentType?.includes("javascript") ||
   !result.replayModule.parserExported ||
+  result.audioModule.status !== 200 ||
+  !result.audioModule.contentType?.includes("javascript") ||
+  !result.audioModule.managerExported ||
   result.health.status !== 200 ||
   !result.health.ok ||
   result.health.modelVersion !== expectedVersion ||
