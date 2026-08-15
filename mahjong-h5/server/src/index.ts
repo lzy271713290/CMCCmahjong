@@ -27,6 +27,7 @@ const mimeTypes: Record<string, string> = {
   ".jpeg": "image/jpeg",
   ".png": "image/png",
   ".svg": "image/svg+xml",
+  ".json": "application/json; charset=utf-8",
   ".mp3": "audio/mpeg",
 };
 
@@ -244,6 +245,22 @@ function broadcastVoiceState(roomCode: string, fromSeat: number, micOn: boolean,
   }
 }
 
+function broadcastChatMessage(roomCode: string, fromSeat: number, text: string): void {
+  const payload: ServerMessage = { type: "chat_message", fromSeat, text: text.slice(0, 200) };
+  for (const [socket, session] of sessionsBySocket) {
+    if (session.roomCode !== roomCode) continue;
+    send(socket, payload);
+  }
+}
+
+function broadcastChatEmote(roomCode: string, fromSeat: number, emote: string, toSeat?: number): void {
+  const payload: ServerMessage = { type: "chat_emote", fromSeat, emote: emote.slice(0, 24), toSeat };
+  for (const [socket, session] of sessionsBySocket) {
+    if (session.roomCode !== roomCode) continue;
+    send(socket, payload);
+  }
+}
+
 function announceToRoom(roomCode: string, messageText: string): number {
   let recipients = 0;
   for (const [socket, session] of sessionsBySocket) {
@@ -343,13 +360,20 @@ webSockets.on("connection", (socket) => {
       requestedRoomCode = "roomCode" in message ? message.roomCode : undefined;
       switch (message.type) {
         case "create_room": {
-          const session = manager.createRoom(message.name, message.totalRounds, message.startScore);
+          const session = manager.createRoom(message.name, message.totalRounds, message.startScore, message.avatar);
           bindSession(socket, session, connectionId, "room_created");
           break;
         }
         case "join_room": {
-          const session = manager.joinRoom(message.roomCode, message.name);
+          const session = manager.joinRoom(message.roomCode, message.name, message.avatar);
           bindSession(socket, session, connectionId, "room_joined");
+          break;
+        }
+        case "update_avatar": {
+          const session = requireSession(socket);
+          const snapshot = manager.updateAvatar(session.roomCode, session.playerToken, message.avatar);
+          broadcast(session.roomCode);
+          logInfo("avatar_updated", { connectionId, roomCode: session.roomCode, seat: session.seat, revision: snapshot.revision });
           break;
         }
         case "reconnect": {
@@ -449,6 +473,20 @@ webSockets.on("connection", (socket) => {
         case "voice_state": {
           const session = requireSession(socket);
           broadcastVoiceState(session.roomCode, session.seat, Boolean(message.micOn), Boolean(message.speakerOn));
+          break;
+        }
+        case "chat_message": {
+          const session = requireSession(socket);
+          const text = typeof message.text === "string" ? message.text.trim() : "";
+          if (!text) throw new RoomError("CHAT_EMPTY", "消息内容不能为空");
+          broadcastChatMessage(session.roomCode, session.seat, text);
+          break;
+        }
+        case "chat_emote": {
+          const session = requireSession(socket);
+          const emote = typeof message.emote === "string" ? message.emote.trim() : "";
+          if (!emote) throw new RoomError("EMOTE_EMPTY", "表情不能为空");
+          broadcastChatEmote(session.roomCode, session.seat, emote, typeof message.toSeat === "number" ? message.toSeat : undefined);
           break;
         }
         case "start_next_round": {

@@ -21,6 +21,7 @@ type Player = {
   id: string;
   token: string;
   name: string;
+  avatar: string;
   seat: number;
   ready: boolean;
   connected: boolean;
@@ -64,6 +65,9 @@ export type Session = {
 
 export const START_SCORE_MIN = 50;
 export const START_SCORE_MAX = 1000;
+
+export const AVATAR_IDS = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"] as const;
+export const DEFAULT_AVATAR = "a1";
 
 export const DISCARD_TIMEOUT_MS = 30_000;
 export const REACTION_TIMEOUT_MS = 12_000;
@@ -157,6 +161,7 @@ export type LeaveRoomResult = {
 
 export type AdminRoomPlayerView = {
   name: string;
+  avatar: string;
   seat: number;
   ready: boolean;
   connected: boolean;
@@ -289,12 +294,13 @@ export class RoomManager {
     private readonly store?: RoomStore,
   ) {}
 
-  createRoom(rawName: string, totalRounds: MatchMode = 8, startScore = 100): Session {
+  createRoom(rawName: string, totalRounds: MatchMode = 8, startScore = 100, rawAvatar?: string): Session {
     const name = this.normalizeName(rawName);
+    const avatar = this.normalizeAvatar(rawAvatar);
     if (totalRounds !== 8 && totalRounds !== 16) throw new RoomError("MATCH_MODE_INVALID", "房间局数只能选择8局或16局");
     const normalizedStartScore = this.normalizeStartScore(startScore);
     const code = this.createCode();
-    const player = this.createPlayer(name, 0);
+    const player = this.createPlayer(name, 0, false, avatar);
     const room: Room = {
       code,
       revision: 1,
@@ -313,20 +319,33 @@ export class RoomManager {
     return this.toSession(room, player);
   }
 
-  joinRoom(rawCode: string, rawName: string): Session {
+  joinRoom(rawCode: string, rawName: string, rawAvatar?: string): Session {
     const room = this.getRoom(rawCode);
     if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始，暂时不能加入");
     if (room.players.length >= 4) {
       throw new RoomError("ROOM_FULL", "房间已经坐满 4 人");
     }
     const name = this.normalizeName(rawName);
+    const avatar = this.normalizeAvatar(rawAvatar);
     const occupied = new Set(room.players.map((player) => player.seat));
     const seat = [0, 1, 2, 3].find((candidate) => !occupied.has(candidate));
     if (seat === undefined) throw new RoomError("ROOM_FULL", "房间已经坐满 4 人");
-    const player = this.createPlayer(name, seat);
+    const player = this.createPlayer(name, seat, false, avatar);
     room.players.push(player);
     room.revision += 1;
     return this.toSession(room, player);
+  }
+
+  updateAvatar(rawCode: string, playerToken: string, rawAvatar?: string): RoomSnapshot {
+    const room = this.getRoom(rawCode);
+    const player = room.players.find((candidate) => candidate.token === playerToken);
+    if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    const avatar = this.normalizeAvatar(rawAvatar);
+    if (player.avatar !== avatar) {
+      player.avatar = avatar;
+      room.revision += 1;
+    }
+    return this.snapshot(room.code);
   }
 
   reconnect(rawCode: string, playerToken: string): Session {
@@ -413,7 +432,7 @@ export class RoomManager {
       const occupied = new Set(room.players.map((player) => player.seat));
       const seat = [0, 1, 2, 3].find((candidate) => !occupied.has(candidate));
       if (seat === undefined) break;
-      const player = this.createPlayer(`测试玩家${testNumber}`, seat, true);
+      const player = this.createPlayer(`测试玩家${testNumber}`, seat, true, `a${seat + 1}`);
       player.ready = true;
       room.players.push(player);
       testNumber += 1;
@@ -1002,6 +1021,7 @@ export class RoomManager {
         .sort((left, right) => left.seat - right.seat)
         .map((player) => ({
           name: player.name,
+          avatar: player.avatar,
           seat: player.seat,
           ready: player.ready,
           connected: player.connected,
@@ -1140,7 +1160,10 @@ export class RoomManager {
     const startScore = typeof raw.startScore === "number" && Number.isInteger(raw.startScore)
       ? this.normalizeStartScore(raw.startScore)
       : 100;
-    return { ...raw, startScore, earlySettlement, game } as Room;
+    const players = Array.isArray(raw.players)
+      ? raw.players.map((player) => isRecord(player) ? { ...player, avatar: this.normalizeAvatar(player.avatar) } : player)
+      : raw.players;
+    return { ...raw, players, startScore, earlySettlement, game } as Room;
   }
 
   private buildSnapshot(room: Room, viewer?: Player): RoomSnapshot {
@@ -1153,6 +1176,7 @@ export class RoomManager {
         .map((player) => ({
           id: player.id,
           name: player.name,
+          avatar: player.avatar,
           seat: player.seat,
           ready: player.ready,
           connected: player.connected,
@@ -1565,11 +1589,12 @@ export class RoomManager {
     };
   }
 
-  private createPlayer(name: string, seat: number, isTestPlayer = false): Player {
+  private createPlayer(name: string, seat: number, isTestPlayer = false, avatar = DEFAULT_AVATAR): Player {
     return {
       id: randomUUID(),
       token: randomUUID(),
       name,
+      avatar: this.normalizeAvatar(avatar),
       seat,
       ready: false,
       connected: true,
@@ -1594,5 +1619,10 @@ export class RoomManager {
     const name = rawName.trim().slice(0, 12);
     if (!name) throw new RoomError("NAME_REQUIRED", "请输入昵称");
     return name;
+  }
+
+  private normalizeAvatar(rawAvatar: unknown): string {
+    if (typeof rawAvatar !== "string" || !AVATAR_IDS.includes(rawAvatar as (typeof AVATAR_IDS)[number])) return DEFAULT_AVATAR;
+    return rawAvatar;
   }
 }

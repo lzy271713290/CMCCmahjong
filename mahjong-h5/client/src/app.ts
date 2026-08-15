@@ -100,8 +100,19 @@ const historyCloseXButton = required<HTMLButtonElement>("history-close-x");
 const requestDissolveButton = required<HTMLButtonElement>("request-dissolve");
 const actionCountdown = required<HTMLElement>("action-countdown");
 const startScoreInput = required<HTMLInputElement>("start-score");
-const voiceMicButton = required<HTMLButtonElement>("voice-mic");
-const voiceSpeakerButton = required<HTMLButtonElement>("voice-speaker");
+const chatToggleButton = required<HTMLButtonElement>("chat-toggle");
+const publicChat = required<HTMLElement>("public-chat");
+const chatCloseButton = required<HTMLButtonElement>("chat-close");
+const chatMessages = required<HTMLElement>("chat-messages");
+const chatForm = required<HTMLFormElement>("chat-form");
+const chatInput = required<HTMLInputElement>("chat-input");
+const chatEmotes = required<HTMLElement>("chat-emotes");
+const throwEffect = required<HTMLElement>("throw-effect");
+const avatarGrid = required<HTMLElement>("avatar-grid");
+const avatarOverlay = required<HTMLElement>("avatar-overlay");
+const avatarOverlayGrid = required<HTMLElement>("avatar-overlay-grid");
+const avatarOverlayClose = required<HTMLButtonElement>("avatar-overlay-close");
+const avatarOverlayConfirm = required<HTMLButtonElement>("avatar-overlay-confirm");
 const paymentDetailOverlay = required<HTMLElement>("payment-detail-overlay");
 const paymentDetailTitle = required<HTMLElement>("payment-detail-title");
 const paymentDetailList = required<HTMLElement>("payment-detail-list");
@@ -126,12 +137,19 @@ let lastServerMessageAt = Date.now();
 let reconnectFeedbackPending = false;
 let importedReplay: PublicReplayRecord | undefined;
 let historySource: HistorySource | undefined;
-const voiceChannel = new VoiceChannel({ send: sendVoiceJson, notice: showNotice });
+const voiceChannel = new VoiceChannel({ send: sendDirect, notice: showNotice });
 const voiceStates = new Map<number, { micOn: boolean; speakerOn: boolean }>();
 let historyCursor = 0;
 let historyPlaybackTimer: number | undefined;
 let countdownTimer: number | undefined;
 let lastCountdownAlarmKey = "";
+const AVATAR_IDS = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"];
+let selectedAvatar = localStorage.getItem("mahjong-avatar") ?? "a1";
+if (!AVATAR_IDS.includes(selectedAvatar)) selectedAvatar = "a1";
+type ChatEntry = { seat: number; text: string; emote: boolean; ts: number };
+const chatHistory: ChatEntry[] = [];
+let slipperAnimationData: unknown;
+let lottieTimer: number | undefined;
 
 function logAudioMonitor(event: AudioMonitorEvent): void {
   const payload = { timestamp: new Date().toISOString(), ...event };
@@ -143,6 +161,43 @@ function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
   if (!element) throw new Error(`Missing element: ${id}`);
   return element as T;
+}
+
+function avatarUrl(avatar: string): string {
+  return `/assets/avatars/avatar-${AVATAR_IDS.includes(avatar) ? avatar : "a1"}.svg`;
+}
+
+function iconSvg(name: "mic" | "mic-off" | "volume" | "volume-x" | "chat" | "slipper"): string {
+  const icons: Record<string, string> = {
+    mic: '<path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" y1="19" x2="12" y2="22"/>',
+    "mic-off": '<line x1="2" y1="2" x2="22" y2="22"/><path d="M18.89 13.23A7.12 7.12 0 0 0 19 12v-2"/><path d="M5 10v2a7 7 0 0 0 12 5"/><path d="M15 9.34V5a3 3 0 0 0-5.68-1.33"/><path d="M9 9v3a3 3 0 0 0 5.12 2.12"/><line x1="12" y1="19" x2="12" y2="22"/>',
+    volume: '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/>',
+    "volume-x": '<polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/>',
+    chat: '<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
+    slipper: '<path d="M4 14c4 0 7-4 7-8V4H5a6 6 0 0 0-1 10z"/><path d="M21 9c-4 0-7 4-7 8v3h5a6 6 0 0 0 2-11z"/><path d="M7 14c3 2 7 2 10 0"/>',
+  };
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${icons[name] ?? icons.chat}</svg>`;
+}
+
+function renderAvatarGrid(container: HTMLElement, current: string, onPick: (id: string) => void): void {
+  container.replaceChildren();
+  for (const id of AVATAR_IDS) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = `avatar-option${id === current ? " active" : ""}`;
+    button.title = `头像 ${id.slice(1)}`;
+    button.dataset.avatar = id;
+    const image = document.createElement("img");
+    image.src = avatarUrl(id);
+    image.alt = "";
+    button.append(image);
+    button.addEventListener("click", () => {
+      onPick(id);
+      container.querySelectorAll(".avatar-option").forEach((option) => option.classList.remove("active"));
+      button.classList.add("active");
+    });
+    container.append(button);
+  }
 }
 
 function connect(): void {
@@ -191,7 +246,7 @@ function connect(): void {
   });
 }
 
-function sendVoiceJson(message: object): boolean {
+function sendDirect(message: object): boolean {
   if (socket?.readyState !== WebSocket.OPEN) return false;
   socket.send(JSON.stringify(message));
   return true;
@@ -225,9 +280,11 @@ function send(message: object, trackRequest = true): boolean {
 function handleMessage(message: ServerMessage): void {
   if (message.type === "session") {
     clearPendingRequest();
+    if (snapshot?.roomCode !== message.roomCode) chatHistory.length = 0;
     voiceChannel.reset();
     voiceStates.clear();
     syncVoiceButtons();
+    renderChatHistory();
     saved = { roomCode: message.roomCode, playerId: message.playerId, playerToken: message.playerToken };
     localStorage.setItem("mahjong-session", JSON.stringify(saved));
     render(message.snapshot);
@@ -258,6 +315,8 @@ function handleMessage(message: ServerMessage): void {
     localStorage.removeItem("mahjong-session");
     saved = undefined;
     snapshot = undefined;
+    chatHistory.length = 0;
+    renderChatHistory();
     history.replaceState({}, "", "/");
     showLobby();
     showNotice("已退出房间");
@@ -268,16 +327,27 @@ function handleMessage(message: ServerMessage): void {
     localStorage.removeItem("mahjong-session");
     saved = undefined;
     snapshot = undefined;
+    chatHistory.length = 0;
+    renderChatHistory();
     history.replaceState({}, "", "/");
     showLobby();
     showNotice(`房间 ${message.roomCode} 已由管理员解散：${message.reason}`);
+  } else if (message.type === "chat_message") {
+    appendChatEntry(message.fromSeat, message.text, false);
+  } else if (message.type === "chat_emote") {
+    appendChatEntry(message.fromSeat, message.emote, true);
+    if (message.emote.includes("slipper") || message.emote.includes("🩴") || message.emote.includes("👡")) {
+      playSlipperThrow(message.fromSeat, message.toSeat);
+    } else {
+      showFloatingEmote(message.fromSeat, message.emote);
+    }
   } else if (message.type === "room_announcement") {
     showNotice(`管理员公告：${message.message}`);
   } else if (message.type === "voice_audio") {
     voiceChannel.handleAudio(message.fromSeat, message.data, message.mimeType);
   } else if (message.type === "voice_state") {
     voiceStates.set(message.fromSeat, { micOn: message.micOn, speakerOn: message.speakerOn });
-    document.querySelector<HTMLElement>(`.player-seat[data-seat="${message.fromSeat}"]`)?.classList.toggle("voice-mic", message.micOn);
+    syncVoiceButtons();
   } else if (message.type === "pong") {
     setConnection("已连接", true);
   }
@@ -313,11 +383,47 @@ function renderWaitingRoom(next: RoomSnapshot, me: PlayerView | undefined): void
     const player = next.players.find((candidate) => candidate.seat === seat);
     const card = document.createElement("div");
     card.className = `seat${player ? " occupied" : ""}`;
-    card.innerHTML = player
-      ? `<div class="seat-head"><span>${seat + 1}号位${player.isHost ? " · 房主" : player.isTestPlayer ? " · 测试" : ""}</span><span class="${player.ready ? "ready" : ""}">${player.connected ? (player.ready ? "已准备" : "在线") : "暂离"}</span></div><span class="seat-name"></span>`
-      : `<div class="seat-head"><span>${seat + 1}号位</span></div><span class="seat-name">等待加入</span>`;
-    const playerName = card.querySelector<HTMLElement>(".seat-name");
-    if (playerName && player) playerName.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+    const head = document.createElement("div");
+    head.className = "seat-head";
+    const role = document.createElement("span");
+    role.textContent = player
+      ? `${seat + 1}号位${player.isHost ? " · 房主" : player.isTestPlayer ? " · 测试" : ""}`
+      : `${seat + 1}号位`;
+    const state = document.createElement("span");
+    if (player) {
+      state.className = player.ready ? "ready" : "";
+      state.textContent = player.connected ? (player.ready ? "已准备" : "在线") : "暂离";
+    }
+    head.append(role, state);
+    card.append(head);
+    const main = document.createElement("div");
+    main.className = "seat-main";
+    if (player) {
+      const avatar = document.createElement("img");
+      avatar.className = "seat-avatar";
+      avatar.src = avatarUrl(player.avatar);
+      avatar.alt = "";
+      avatar.title = player.id === saved?.playerId ? "点击更换头像" : player.name;
+      if (player.id === saved?.playerId) avatar.addEventListener("click", openAvatarPicker);
+      const name = document.createElement("span");
+      name.className = "seat-name";
+      name.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+      main.append(avatar, name);
+      if (player.id === saved?.playerId) {
+        const hint = document.createElement("button");
+        hint.type = "button";
+        hint.className = "seat-edit-hint";
+        hint.textContent = "换头像";
+        hint.addEventListener("click", openAvatarPicker);
+        main.append(hint);
+      }
+    } else {
+      const name = document.createElement("span");
+      name.className = "seat-name";
+      name.textContent = "等待加入";
+      main.append(name);
+    }
+    card.append(main);
     seats.append(card);
   }
   readyButton.textContent = me?.ready ? "取消准备" : "准备";
@@ -386,15 +492,52 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     playerSeat.dataset.seat = String(player.seat);
     if (voiceStates.get(player.seat)?.micOn) playerSeat.classList.add("voice-mic");
 
-    const avatar = document.createElement("div");
+    const avatarBlock = document.createElement("div");
+    avatarBlock.className = "avatar-block";
+    const avatar = document.createElement("img");
     avatar.className = "avatar";
-    avatar.textContent = Array.from(player.name)[0] ?? "麻";
+    avatar.src = avatarUrl(player.avatar);
+    avatar.alt = "";
+    const actions = document.createElement("div");
+    actions.className = "player-actions";
+    const micButton = document.createElement("button");
+    micButton.type = "button";
+    micButton.className = "seat-action-btn";
+    micButton.dataset.action = "mic";
+    micButton.dataset.seat = String(player.seat);
+    micButton.setAttribute("aria-label", "麦克风");
+    const speakerButton = document.createElement("button");
+    speakerButton.type = "button";
+    speakerButton.className = "seat-action-btn";
+    speakerButton.dataset.action = "speaker";
+    speakerButton.dataset.seat = String(player.seat);
+    speakerButton.setAttribute("aria-label", "喇叭");
+    const chatButton = document.createElement("button");
+    chatButton.type = "button";
+    chatButton.className = "seat-action-btn";
+    chatButton.dataset.action = "chat";
+    chatButton.dataset.seat = String(player.seat);
+    chatButton.setAttribute("aria-label", "公屏聊天");
+    chatButton.innerHTML = iconSvg("chat");
+    actions.append(micButton, speakerButton, chatButton);
+    if (position !== "bottom") {
+      const slipperButton = document.createElement("button");
+      slipperButton.type = "button";
+      slipperButton.className = "seat-action-btn";
+      slipperButton.dataset.action = "slipper";
+      slipperButton.dataset.seat = String(player.seat);
+      slipperButton.setAttribute("aria-label", `向 ${player.name} 丢拖鞋`);
+      slipperButton.title = `向 ${player.name} 丢拖鞋`;
+      slipperButton.innerHTML = iconSvg("slipper");
+      actions.append(slipperButton);
+    }
+    avatarBlock.append(avatar, actions);
     const info = document.createElement("div");
     info.className = "player-info";
     const role = player.seat === game.dealerSeat ? "庄" : winds[(player.seat - game.dealerSeat + 4) % 4];
     info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张 · ${next.scoreTotals[player.seat] ?? 100}分${player.isTestPlayer ? " · 测试" : player.autoManaged ? " · 托管" : ""}</span>`;
     info.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
-    playerSeat.append(avatar, info);
+    playerSeat.append(avatarBlock, info);
 
     if (position !== "bottom") {
       const rack = document.createElement("div");
@@ -429,6 +572,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     }
     tableSeats.append(playerSeat);
   }
+  syncVoiceButtons();
 }
 
 function renderOperations(options: ReactionOption[], turnOptions: TurnOperationOption[]): void {
@@ -1126,6 +1270,8 @@ function showLobby(): void {
   gameScreen.classList.add("hidden");
   lobby.classList.remove("hidden");
   networkOverlay.classList.add("hidden");
+  setChatVisible(false);
+  avatarOverlay.classList.add("hidden");
 }
 
 function loadSession(): SavedSession | undefined {
@@ -1209,10 +1355,174 @@ function openPaymentDetail(rowSeat: number, columnSeat: number, value: number, p
 }
 
 function syncVoiceButtons(): void {
-  voiceMicButton.classList.toggle("active", voiceChannel.micOn);
-  voiceMicButton.setAttribute("aria-pressed", String(voiceChannel.micOn));
-  voiceSpeakerButton.classList.toggle("active", voiceChannel.speakerOn);
-  voiceSpeakerButton.setAttribute("aria-pressed", String(voiceChannel.speakerOn));
+  const mySeat = snapshot?.game?.viewerSeat ?? snapshot?.players.find((player) => player.id === saved?.playerId)?.seat;
+  document.querySelectorAll<HTMLElement>(".player-seat[data-seat]").forEach((seatElement) => {
+    const seat = Number(seatElement.dataset.seat);
+    const isMe = seat === mySeat;
+    const micOn = isMe ? voiceChannel.micOn : Boolean(voiceStates.get(seat)?.micOn);
+    const speakerOn = isMe ? voiceChannel.speakerOn : (voiceStates.get(seat)?.speakerOn ?? true);
+    const micButton = seatElement.querySelector<HTMLButtonElement>('[data-action="mic"]');
+    const speakerButton = seatElement.querySelector<HTMLButtonElement>('[data-action="speaker"]');
+    if (micButton) {
+      micButton.classList.toggle("active", micOn);
+      micButton.classList.toggle("mic-off", !micOn);
+      micButton.innerHTML = iconSvg(micOn ? "mic" : "mic-off");
+      micButton.title = isMe ? (micOn ? "关闭麦克风" : "打开麦克风") : (micOn ? "正在说话" : "麦克风关闭");
+      micButton.setAttribute("aria-pressed", String(micOn));
+    }
+    if (speakerButton) {
+      speakerButton.classList.toggle("active", speakerOn);
+      speakerButton.innerHTML = iconSvg(speakerOn ? "volume" : "volume-x");
+      speakerButton.title = isMe ? (speakerOn ? "关闭喇叭" : "打开喇叭") : (speakerOn ? "正在收听" : "喇叭关闭");
+      speakerButton.setAttribute("aria-pressed", String(speakerOn));
+    }
+    seatElement.classList.toggle("voice-mic", micOn);
+  });
+}
+
+function appendChatEntry(seat: number, text: string, emote: boolean): void {
+  chatHistory.push({ seat, text, emote, ts: Date.now() });
+  if (chatHistory.length > 60) chatHistory.shift();
+  renderChatHistory();
+}
+
+function renderChatHistory(): void {
+  chatMessages.replaceChildren();
+  for (const entry of chatHistory) {
+    const row = document.createElement("div");
+    row.className = `chat-entry${entry.seat === snapshot?.game?.viewerSeat || entry.seat === snapshot?.players.find((player) => player.id === saved?.playerId)?.seat ? " me" : ""}`;
+    if (entry.emote) {
+      const emoteText = document.createElement("span");
+      emoteText.className = "chat-emote-text";
+      emoteText.textContent = entry.text;
+      row.append(emoteText);
+    } else {
+      const name = document.createElement("span");
+      name.className = "chat-name";
+      name.textContent = `${playerName(snapshot!, entry.seat)}：`;
+      const body = document.createElement("span");
+      body.textContent = entry.text;
+      row.append(name, body);
+    }
+    chatMessages.append(row);
+  }
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+function setChatVisible(visible: boolean): void {
+  publicChat.classList.toggle("hidden", !visible);
+  chatToggleButton.classList.toggle("active", visible);
+  if (visible) chatInput.focus();
+}
+
+function toggleMicFromSeat(): Promise<void> {
+  return voiceChannel.toggleMic().then((result) => {
+    syncVoiceButtons();
+    sendDirect({ type: "voice_state", micOn: result.micOn, speakerOn: voiceChannel.speakerOn });
+  });
+}
+
+function toggleSpeakerFromSeat(): void {
+  const result = voiceChannel.toggleSpeaker();
+  syncVoiceButtons();
+  sendDirect({ type: "voice_state", micOn: voiceChannel.micOn, speakerOn: result.speakerOn });
+}
+
+function throwSlipperAt(targetSeat: number): void {
+  sendDirect({ type: "chat_emote", emote: "slipper", toSeat: targetSeat });
+}
+
+function playSlipperThrow(fromSeat: number, toSeat?: number): void {
+  const source = document.querySelector<HTMLElement>(`.player-seat[data-seat="${fromSeat}"]`);
+  const target = toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"]`);
+  const startRect = source?.getBoundingClientRect();
+  const endRect = target?.getBoundingClientRect() ?? source?.getBoundingClientRect();
+  if (!startRect || !endRect) {
+    showSmackBurst(window.innerWidth / 2, window.innerHeight / 2);
+    return;
+  }
+  const startX = startRect.left + startRect.width / 2 - 22;
+  const startY = startRect.top + startRect.height / 2 - 22;
+  const endX = endRect.left + endRect.width / 2 - 22;
+  const endY = endRect.top + endRect.height / 2 - 22;
+  const slipper = document.createElement("div");
+  slipper.className = "flying-slipper";
+  slipper.textContent = "🩴";
+  slipper.style.setProperty("--fx-sx", `${startX}px`);
+  slipper.style.setProperty("--fx-sy", `${startY}px`);
+  slipper.style.setProperty("--fx-ex", `${endX}px`);
+  slipper.style.setProperty("--fx-ey", `${endY}px`);
+  slipper.style.setProperty("--fx-sr", `${Math.random() > 0.5 ? 1 : -1 * (360 + Math.random() * 200)}deg`);
+  throwEffect.append(slipper);
+  window.setTimeout(() => {
+    slipper.remove();
+    showSmackBurst(endX + 22, endY + 22);
+  }, 720);
+}
+
+async function loadSlipperAnimation(): Promise<unknown> {
+  if (!slipperAnimationData) {
+    const response = await fetch("/assets/effects/slipper-smack.json");
+    if (!response.ok) throw new Error("slipper animation unavailable");
+    slipperAnimationData = await response.json();
+  }
+  return slipperAnimationData;
+}
+
+function showSmackBurst(x: number, y: number): void {
+  const burst = document.createElement("div");
+  burst.className = "smack-burst";
+  burst.style.left = `${x}px`;
+  burst.style.top = `${y}px`;
+  throwEffect.append(burst);
+  const lottieLib = (window as unknown as { lottie?: { loadAnimation: (options: Record<string, unknown>) => unknown } }).lottie;
+  void loadSlipperAnimation().then((animationData) => {
+    if (lottieLib?.loadAnimation && !burst.dataset.failed) {
+      lottieLib.loadAnimation({ container: burst, renderer: "svg", loop: false, autoplay: true, animationData });
+    }
+  }).catch(() => {
+    burst.dataset.failed = "1";
+    const fallback = document.createElement("div");
+    fallback.className = "smack-fallback";
+    fallback.textContent = "💥🩴";
+    burst.append(fallback);
+  });
+  window.clearTimeout(lottieTimer);
+  lottieTimer = window.setTimeout(() => burst.remove(), 1350);
+}
+
+function showFloatingEmote(seat: number, emote: string): void {
+  const seatElement = document.querySelector<HTMLElement>(`.player-seat[data-seat="${seat}"]`);
+  const rect = seatElement?.getBoundingClientRect();
+  if (!rect) return;
+  const bubble = document.createElement("div");
+  bubble.className = "emote-bubble";
+  bubble.textContent = emote;
+  bubble.style.left = `${rect.left + rect.width / 2}px`;
+  bubble.style.top = `${rect.top + 8}px`;
+  throwEffect.append(bubble);
+  window.setTimeout(() => bubble.remove(), 1700);
+}
+
+function openAvatarPicker(): void {
+  renderAvatarGrid(avatarOverlayGrid, selectedAvatar, () => undefined);
+  avatarOverlay.classList.remove("hidden");
+}
+
+function applyAvatarSelection(): void {
+  const active = avatarOverlayGrid.querySelector<HTMLButtonElement>(".avatar-option.active");
+  const picked = active?.dataset.avatar ?? selectedAvatar;
+  selectedAvatar = AVATAR_IDS.includes(picked) ? picked : "a1";
+  localStorage.setItem("mahjong-avatar", selectedAvatar);
+  renderAvatarGrid(avatarGrid, selectedAvatar, pickLobbyAvatar);
+  if (saved && snapshot) sendDirect({ type: "update_avatar", avatar: selectedAvatar });
+  avatarOverlay.classList.add("hidden");
+}
+
+function pickLobbyAvatar(id: string): void {
+  selectedAvatar = id;
+  localStorage.setItem("mahjong-avatar", id);
+  renderAvatarGrid(avatarGrid, id, pickLobbyAvatar);
 }
 
 function setRulesVisible(visible: boolean): void {
@@ -1436,13 +1746,13 @@ createButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   localStorage.setItem("mahjong-nickname", nameInput.value.trim());
   const startScore = Number(startScoreInput.value);
-  send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16, startScore: Number.isFinite(startScore) ? startScore : 100 });
+  send({ type: "create_room", name: nameInput.value, avatar: selectedAvatar, totalRounds: Number(matchRounds.value) as 8 | 16, startScore: Number.isFinite(startScore) ? startScore : 100 });
 });
 joinButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   if (!/^\d{6}$/.test(codeInput.value.trim())) return showNotice("请输入六位房间号");
   localStorage.setItem("mahjong-nickname", nameInput.value.trim());
-  send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value });
+  send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value, avatar: selectedAvatar });
 });
 readyButton.addEventListener("click", () => {
   const me = snapshot?.players.find((player) => player.id === saved?.playerId);
@@ -1503,17 +1813,37 @@ voiceGenderGameSelect.addEventListener("change", () => {
   syncAudioSettingsUI();
 });
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
-voiceMicButton.addEventListener("click", async () => {
-  const result = await voiceChannel.toggleMic();
-  voiceMicButton.classList.toggle("active", result.micOn);
-  voiceMicButton.setAttribute("aria-pressed", String(result.micOn));
-  sendVoiceJson({ type: "voice_state", micOn: result.micOn, speakerOn: voiceChannel.speakerOn });
+tableSeats.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
+  if (!button) return;
+  const action = button.dataset.action;
+  if (action === "mic") void toggleMicFromSeat();
+  else if (action === "speaker") toggleSpeakerFromSeat();
+  else if (action === "chat") setChatVisible(publicChat.classList.contains("hidden"));
+  else if (action === "slipper") throwSlipperAt(Number(button.dataset.seat));
 });
-voiceSpeakerButton.addEventListener("click", () => {
-  const result = voiceChannel.toggleSpeaker();
-  voiceSpeakerButton.classList.toggle("active", result.speakerOn);
-  voiceSpeakerButton.setAttribute("aria-pressed", String(result.speakerOn));
-  sendVoiceJson({ type: "voice_state", micOn: voiceChannel.micOn, speakerOn: result.speakerOn });
+chatToggleButton.addEventListener("click", () => setChatVisible(publicChat.classList.contains("hidden")));
+chatCloseButton.addEventListener("click", () => setChatVisible(false));
+chatForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const text = chatInput.value.trim();
+  if (!text) return;
+  sendDirect({ type: "chat_message", text });
+  chatInput.value = "";
+});
+for (const emote of ["😂", "👍", "🍀", "🔥", "🎉", "😡", "😴", "🀄", "🩴"]) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "chat-emote-button";
+  button.textContent = emote;
+  button.title = emote === "🩴" ? "丢个拖鞋" : `发送 ${emote}`;
+  button.addEventListener("click", () => sendDirect({ type: "chat_emote", emote }));
+  chatEmotes.append(button);
+}
+avatarOverlayClose.addEventListener("click", () => avatarOverlay.classList.add("hidden"));
+avatarOverlayConfirm.addEventListener("click", applyAvatarSelection);
+avatarOverlay.addEventListener("click", (event) => {
+  if (event.target === avatarOverlay) avatarOverlay.classList.add("hidden");
 });
 paymentDetailClose.addEventListener("click", () => paymentDetailOverlay.classList.add("hidden"));
 paymentDetailOverlay.addEventListener("click", (event) => {
@@ -1565,6 +1895,8 @@ document.addEventListener("keydown", (event) => {
     setRulesVisible(false);
     setHistoryVisible(false);
     setAudioSettingsVisible(false);
+    setChatVisible(false);
+    avatarOverlay.classList.add("hidden");
   }
 });
 window.addEventListener("online", () => {
@@ -1578,6 +1910,7 @@ document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
   if (target.closest("button")) audioManager.playEffect("ui");
   if (!target.closest("#audio-settings") && !target.closest("#sound-toggle")) setAudioSettingsVisible(false);
+  if (!target.closest("#public-chat") && !target.closest("#chat-toggle")) setChatVisible(false);
 });
 
 function setAudioSettingsVisible(visible: boolean): void {
@@ -1617,6 +1950,7 @@ window.addEventListener("orientationchange", refreshRotateTip);
 refreshRotateTip();
 
 syncAudioSettingsUI();
+renderAvatarGrid(avatarGrid, selectedAvatar, pickLobbyAvatar);
 const savedNickname = localStorage.getItem("mahjong-nickname");
 if (savedNickname) nameInput.value = savedNickname;
 const invitedRoom = new URLSearchParams(location.search).get("room");

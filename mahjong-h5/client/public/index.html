@@ -18,6 +18,10 @@
         <h2>一起开一桌</h2>
         <p class="muted">输入昵称后开房，朋友用六位房间号加入。</p>
         <label>你的昵称<input id="name" maxlength="12" autocomplete="nickname" placeholder="例如：老张" /></label>
+        <div class="avatar-picker">
+          <span>我的头像</span>
+          <div id="avatar-grid" class="avatar-grid"></div>
+        </div>
         <div class="gender-picker">
           <span>报牌声音</span>
           <div class="gender-options">
@@ -66,8 +70,7 @@
             <button id="rules-game" class="hud-button" type="button" aria-label="查看规则" title="查看规则">规</button>
             <button id="history-game" class="hud-button" type="button" aria-label="查看牌局记录" title="查看牌局记录">记</button>
             <button id="request-dissolve" class="hud-button" type="button" aria-label="申请解散牌局" title="申请解散牌局">散</button>
-            <button id="voice-mic" class="hud-button" type="button" aria-pressed="false" aria-label="打开麦克风" title="打开麦克风">麦</button>
-            <button id="voice-speaker" class="hud-button" type="button" aria-pressed="true" aria-label="打开喇叭" title="打开喇叭">喇</button>
+            <button id="chat-toggle" class="hud-button" type="button" aria-label="公屏聊天" title="公屏聊天"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></button>
             <button id="sound-toggle" class="hud-button" type="button" aria-label="声音设置" aria-expanded="false" title="声音设置">声</button>
             <button id="fullscreen-toggle" class="hud-button" type="button" aria-label="全屏横屏" title="全屏横屏">全</button>
             <span id="game-connection" class="status">连接中</span>
@@ -106,6 +109,16 @@
         <div id="operation-panel" class="operation-panel hidden" aria-label="可选操作"></div>
         <div id="action-banner" class="action-banner hidden" aria-live="assertive"></div>
         <div id="table-effect" class="table-effect hidden" aria-hidden="true"></div>
+        <div id="throw-effect" class="throw-effect" aria-hidden="true"></div>
+        <section id="public-chat" class="public-chat hidden" aria-label="公屏聊天">
+          <header><strong>公屏</strong><button id="chat-close" type="button" aria-label="关闭聊天">×</button></header>
+          <div id="chat-messages" class="chat-messages"></div>
+          <div id="chat-emotes" class="chat-emotes"></div>
+          <form id="chat-form">
+            <input id="chat-input" maxlength="80" autocomplete="off" placeholder="说点什么..." />
+            <button id="chat-send" type="submit">发送</button>
+          </form>
+        </section>
         <div id="score-summary" class="score-summary hidden" aria-live="polite"></div>
         <div id="payment-detail-overlay" class="payment-detail-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="payment-detail-title">
           <article>
@@ -127,6 +140,14 @@
       </div>
     </section>
 
+    <div id="avatar-overlay" class="avatar-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="avatar-overlay-title">
+      <div class="avatar-modal">
+        <header><strong id="avatar-overlay-title">选择头像</strong><button id="avatar-overlay-close" type="button" aria-label="关闭">×</button></header>
+        <div id="avatar-overlay-grid" class="avatar-grid"></div>
+        <button id="avatar-overlay-confirm" class="primary" type="button">确认</button>
+      </div>
+    </div>
+
     <div id="rules-overlay" class="rules-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="rules-title">
       <article class="rules-card">
         <header><div><span class="eyebrow">开局前看一分钟</span><h2 id="rules-title">玩法与操作说明</h2></div><button id="rules-close-x" class="rules-close-x" type="button" aria-label="关闭">×</button></header>
@@ -136,7 +157,7 @@
           <section><h3>响应顺序</h3><p>胡优先于杠、碰、吃；只有弃牌者的下家能吃。多人同时可胡时按当前规则结算。</p></section>
           <section><h3>本项目规则</h3><p>支持普通胡、七对、自摸、点炮、明杠、暗杠、加杠、抢杠胡，以及中发白和东南西北两类特殊杠、涨毛。</p></section>
           <section><h3>结算与断线</h3><p>任意玩家可申请解散，四人一致同意才结束；未完成局不计局数，已结算杠分保留。掉线90秒进入托管，重连立即接管。每局结束后所有真人需点“准备下一局”，房主才能开始下一局；结算矩阵中点击数字可查看支付明细。</p></section>
-          <section><h3>声音与特效</h3><p>牌桌提供34张牌真人语音、男声/女声切换、吃碰杠胡报音、背景音乐、结算特效和粒子动画；点击右上角“声”可分别开关。牌桌右上角的“麦/喇”可开麦说话和收听其他开麦玩家，麦克风需要 HTTPS 页面。</p></section>
+          <section><h3>头像、声音与公屏</h3><p>大厅和等待房间可自选系统头像；牌桌每个玩家头像下有麦克风、喇叭和聊天图标。点对方头像旁的拖鞋可丢拖鞋，公屏可发文字和表情。麦克风需要 HTTPS 页面。</p></section>
           <section><h3>房间管理</h3><p>等待时可退出，房主退出会自动转给下一位真人；误加测试玩家可一键移除。牌局进行中请勿主动退出。</p></section>
         </div>
         <button id="rules-close" class="primary" type="button">知道了，开始打牌</button>
@@ -163,6 +184,7 @@
       </article>
     </div>
 
+    <script src="/assets/vendor/lottie_light.min.js"></script>
     <script type="module" src="/app.js"></script>
   </body>
 </html>

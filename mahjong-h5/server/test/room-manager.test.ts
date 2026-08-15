@@ -109,6 +109,19 @@ test("创建房间可以选择8局或16局模式", () => {
   );
 });
 
+test("创建和加入房间携带头像并支持中途换头像", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("房主", 8, 100, "a7");
+  assert.equal(host.snapshot.players[0]?.avatar, "a7");
+  const second = rooms.joinRoom(host.roomCode, "玩家二", "a9");
+  assert.equal(second.snapshot.players[1]?.avatar, "a9");
+  const invalid = rooms.createRoom("非法头像", 8, 100, "nope");
+  assert.equal(invalid.snapshot.players[0]?.avatar, "a1");
+  const updated = rooms.updateAvatar(host.roomCode, host.playerToken, "a5");
+  assert.equal(updated.players.find((player) => player.id === host.playerId)?.avatar, "a5");
+  assert.equal(updated.players.find((player) => player.id === second.playerId)?.avatar, "a9");
+});
+
 test("有人未准备时不能开始游戏", () => {
   const rooms = new RoomManager();
   const host = rooms.createRoom("房主");

@@ -130,6 +130,7 @@ export type RoundResultView = {
 export type PlayerView = {
   id: string;
   name: string;
+  avatar: string;
   seat: number;
   ready: boolean;
   connected: boolean;
@@ -177,10 +178,11 @@ export type RoomSnapshot = {
 };
 
 export type ClientMessage =
-  | { type: "create_room"; name: string; totalRounds?: MatchMode; startScore?: number }
-  | { type: "join_room"; roomCode: string; name: string }
+  | { type: "create_room"; name: string; avatar?: string; totalRounds?: MatchMode; startScore?: number }
+  | { type: "join_room"; roomCode: string; name: string; avatar?: string }
   | { type: "reconnect"; roomCode: string; playerToken: string }
   | { type: "set_ready"; ready: boolean }
+  | { type: "update_avatar"; avatar: string }
   | { type: "fill_test_players" }
   | { type: "remove_test_players" }
   | { type: "leave_room" }
@@ -193,6 +195,8 @@ export type ClientMessage =
   | { type: "perform_turn_operation"; operationId: string }
   | { type: "voice_audio"; data: string; mimeType: string }
   | { type: "voice_state"; micOn: boolean; speakerOn: boolean }
+  | { type: "chat_message"; text: string }
+  | { type: "chat_emote"; emote: string; toSeat?: number }
   | { type: "ping" };
 
 export type ServerMessage =
@@ -209,5 +213,7 @@ export type ServerMessage =
   | { type: "room_announcement"; message: string }
   | { type: "voice_audio"; fromSeat: number; data: string; mimeType: string }
   | { type: "voice_state"; fromSeat: number; micOn: boolean; speakerOn: boolean }
+  | { type: "chat_message"; fromSeat: number; text: string }
+  | { type: "chat_emote"; fromSeat: number; emote: string; toSeat?: number }
   | { type: "error"; code: string; message: string }
   | { type: "pong" };
