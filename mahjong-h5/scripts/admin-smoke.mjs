@@ -3,7 +3,7 @@ import WebSocket from "ws";
 const args = process.argv.slice(2).filter((arg) => arg !== "--");
 const httpBaseUrl = (args[0] ?? "http://127.0.0.1:3000").replace(/\/+$/, "");
 const token = args[1] ?? process.env.ADMIN_TOKEN;
-const expectedVersion = args[2] ?? "persist-control-v17";
+const expectedVersion = args[2] ?? "ui-voice-v18";
 
 if (!token) throw new Error("缺少 ADMIN_TOKEN");
 
@@ -58,7 +58,7 @@ try {
 
   socket = await openSocket();
   const createdWait = nextMessage(socket, "session");
-  socket.send(JSON.stringify({ type: "create_room", name: "后台冒烟", totalRounds: 8 }));
+  socket.send(JSON.stringify({ type: "create_room", name: "后台冒烟", totalRounds: 8, startScore: 150 }));
   const created = await createdWait;
   roomCode = created.roomCode;
 
@@ -99,6 +99,7 @@ try {
   const result = {
     httpBaseUrl,
     modelVersion: health.modelVersion,
+    startScore: detail.room.match?.startScore,
     roomCount: summaryAfter.roomCount,
     waitingRoomCount: summaryAfter.waitingRoomCount,
     connectedSockets: summaryAfter.connectedSockets,
@@ -114,6 +115,7 @@ try {
   console.log(JSON.stringify(result));
   if (
     result.modelVersion !== expectedVersion ||
+    result.startScore !== 150 ||
     result.roomCount < 1 ||
     result.waitingRoomCount < 1 ||
     result.connectedSockets < 1 ||

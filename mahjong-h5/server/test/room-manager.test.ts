@@ -20,6 +20,10 @@ function passAllReactions(rooms: RoomManager, sessions: Session[], initial: Room
   return snapshot;
 }
 
+function readyAllForNextRound(rooms: RoomManager, sessions: Session[]): void {
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+}
+
 test("四名玩家可以加入并同步准备状态", () => {
   const rooms = new RoomManager();
   const host = rooms.createRoom("房主");
@@ -78,6 +82,7 @@ test("创建房间可以选择8局或16局模式", () => {
   const sixteen = rooms.createRoom("十六局房", 16);
   assert.deepEqual(eight.snapshot.match, {
     totalRounds: 8,
+    startScore: 100,
     completedRounds: 0,
     status: "waiting",
     endReason: undefined,
@@ -86,6 +91,18 @@ test("创建房间可以选择8局或16局模式", () => {
     earlySettlement: undefined,
   });
   assert.equal(sixteen.snapshot.match.totalRounds, 16);
+  const custom = rooms.createRoom("自定义分房", 8, 250);
+  assert.equal(custom.snapshot.match.startScore, 250);
+  assert.deepEqual(custom.snapshot.scoreTotals, [250, 250, 250, 250]);
+  assert.equal(rooms.createRoom("默认分房", 8).snapshot.match.startScore, 100);
+  assert.throws(
+    () => rooms.createRoom("低分房", 8, 49),
+    (error) => error instanceof RoomError && error.code === "START_SCORE_INVALID",
+  );
+  assert.throws(
+    () => rooms.createRoom("超高分房", 8, 1001),
+    (error) => error instanceof RoomError && error.code === "START_SCORE_INVALID",
+  );
   assert.throws(
     () => rooms.createRoom("错误房", 12 as 8),
     (error) => error instanceof RoomError && error.code === "MATCH_MODE_INVALID",
@@ -437,7 +454,7 @@ test("点炮胡响应结束本局并公开赢家、点炮者和胡牌张", () =>
     tile: "east",
   });
   assert.deepEqual(roundResult.scoreDeltas, [-32, 48, -8, -8]);
-  assert.deepEqual(result.snapshot.scoreTotals, [168, 248, 192, 192]);
+  assert.deepEqual(result.snapshot.scoreTotals, [68, 148, 92, 92]);
   assert.throws(
     () => rooms.discardTile(started.roomCode, sessions[1]!.playerToken, "wan-1"),
     (error) => error instanceof RoomError && error.code === "ROUND_ENDED",
@@ -520,7 +537,7 @@ test("自摸候选只下发给当前玩家并在确认后结束本局", () => {
   assert.equal(result.snapshot.game?.roundResult?.reason, "self_draw_hu");
   assert.equal(result.snapshot.game?.roundResult?.tile, "east");
   assert.deepEqual(result.snapshot.game?.roundResult?.scoreDeltas, [96, -32, -32, -32]);
-  assert.deepEqual(result.snapshot.scoreTotals, [296, 168, 168, 168]);
+  assert.deepEqual(result.snapshot.scoreTotals, [196, 68, 68, 68]);
 });
 
 test("庄家胡牌后连庄并保留累计分进入下一局", () => {
@@ -530,17 +547,18 @@ test("庄家胡牌后连庄并保留累计分进入下一局", () => {
     (error) => error instanceof RoomError && error.code === "ROUND_ACTIVE",
   );
   const ended = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, "zimo").snapshot;
-  assert.deepEqual(ended.scoreTotals, [296, 168, 168, 168]);
+  assert.deepEqual(ended.scoreTotals, [196, 68, 68, 68]);
   assert.throws(
     () => rooms.startNextRound(started.roomCode, sessions[1]!.playerToken),
     (error) => error instanceof RoomError && error.code === "HOST_REQUIRED",
   );
 
+  readyAllForNextRound(rooms, sessions);
   const next = rooms.startNextRound(started.roomCode, sessions[0]!.playerToken);
   assert.equal(next.game?.roundNumber, 2);
   assert.equal(next.game?.dealerSeat, 0);
   assert.equal(next.game?.turnSeat, 0);
-  assert.deepEqual(next.scoreTotals, [296, 168, 168, 168]);
+  assert.deepEqual(next.scoreTotals, [196, 68, 68, 68]);
   assert.deepEqual(next.game?.scorePayments, []);
   assert.deepEqual(next.game?.scoreDeltas, [0, 0, 0, 0]);
   assert.deepEqual(next.game?.handTileCounts, [14, 13, 13, 13]);
@@ -552,13 +570,14 @@ test("闲家胡牌后由原庄下家坐庄", () => {
   const winnerView = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
   const hu = winnerView.game!.availableOperations!.find((option) => option.kind === "hu")!;
   const ended = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, hu.id).snapshot;
-  assert.deepEqual(ended.scoreTotals, [168, 248, 192, 192]);
+  assert.deepEqual(ended.scoreTotals, [68, 148, 92, 92]);
 
+  readyAllForNextRound(rooms, sessions);
   const next = rooms.startNextRound(started.roomCode, sessions[0]!.playerToken);
   assert.equal(next.game?.roundNumber, 2);
   assert.equal(next.game?.dealerSeat, 1);
   assert.equal(next.game?.turnSeat, 1);
-  assert.deepEqual(next.scoreTotals, [168, 248, 192, 192]);
+  assert.deepEqual(next.scoreTotals, [68, 148, 92, 92]);
   assert.deepEqual(next.game?.handTileCounts, [13, 14, 13, 13]);
 });
 
@@ -602,16 +621,19 @@ test("8局模式完成第8局后按累计分并列排名", () => {
     )!;
     snapshot = rooms.discardTile(snapshot.roomCode, dealerSession.playerToken, "wan-1").snapshot;
     assert.equal(snapshot.match.completedRounds, round);
-    if (round < 8) snapshot = rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken);
+    if (round < 8) {
+      readyAllForNextRound(rooms, sessions);
+      snapshot = rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken);
+    }
   }
 
   assert.equal(snapshot.match.status, "completed");
   assert.equal(snapshot.match.endReason, "round_limit");
   assert.deepEqual(snapshot.match.rankings, [
-    { seat: 0, score: 200, rank: 1 },
-    { seat: 1, score: 200, rank: 1 },
-    { seat: 2, score: 200, rank: 1 },
-    { seat: 3, score: 200, rank: 1 },
+    { seat: 0, score: 100, rank: 1 },
+    { seat: 1, score: 100, rank: 1 },
+    { seat: 2, score: 100, rank: 1 },
+    { seat: 3, score: 100, rank: 1 },
   ]);
   assert.equal(snapshot.match.roundHistory.length, 8);
   assert.deepEqual(snapshot.match.roundHistory[0], {
@@ -620,7 +642,7 @@ test("8局模式完成第8局后按累计分并列排名", () => {
     reason: "wall_exhausted",
     winnerSeats: [],
     scoreDeltas: [0, 0, 0, 0],
-    scoreTotals: [200, 200, 200, 200],
+    scoreTotals: [100, 100, 100, 100],
   });
   assert.throws(
     () => rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken),
@@ -630,30 +652,33 @@ test("8局模式完成第8局后按累计分并列排名", () => {
 
 test("16局模式在局末出现负分时提前结束并生成并列排名", () => {
   const rooms = new RoomManager(() => 0, () => createSelfDrawGame());
-  const sessions = [rooms.createRoom("东", 16)];
+  const sessions = [rooms.createRoom("东", 16, 100)];
   sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
   sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
   sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
   for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
   let snapshot = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
 
-  for (let round = 1; round <= 7; round += 1) {
+  for (let round = 1; snapshot.match.status !== "completed"; round += 1) {
     snapshot = rooms.performTurnOperation(snapshot.roomCode, sessions[0]!.playerToken, "zimo").snapshot;
-    if (round < 7) snapshot = rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken);
+    if (snapshot.match.status !== "completed") {
+      readyAllForNextRound(rooms, sessions);
+      snapshot = rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken);
+    }
   }
 
   assert.equal(snapshot.match.status, "completed");
-  assert.equal(snapshot.match.completedRounds, 7);
+  assert.equal(snapshot.match.completedRounds, 4);
   assert.equal(snapshot.match.endReason, "negative_score");
-  assert.deepEqual(snapshot.scoreTotals, [872, -24, -24, -24]);
+  assert.deepEqual(snapshot.scoreTotals, [484, -28, -28, -28]);
   assert.deepEqual(snapshot.match.rankings, [
-    { seat: 0, score: 872, rank: 1 },
-    { seat: 1, score: -24, rank: 2 },
-    { seat: 2, score: -24, rank: 2 },
-    { seat: 3, score: -24, rank: 2 },
+    { seat: 0, score: 484, rank: 1 },
+    { seat: 1, score: -28, rank: 2 },
+    { seat: 2, score: -28, rank: 2 },
+    { seat: 3, score: -28, rank: 2 },
   ]);
-  assert.equal(snapshot.match.roundHistory.length, 7);
-  assert.deepEqual(snapshot.match.roundHistory.at(-1)?.scoreTotals, [872, -24, -24, -24]);
+  assert.equal(snapshot.match.roundHistory.length, 4);
+  assert.deepEqual(snapshot.match.roundHistory.at(-1)?.scoreTotals, [484, -28, -28, -28]);
 });
 
 function startEarlySettlementRoom(useTestPlayers = false): { rooms: RoomManager; sessions: Session[]; ended: RoomSnapshot } {
@@ -675,6 +700,17 @@ function startEarlySettlementRoom(useTestPlayers = false): { rooms: RoomManager;
   return { rooms, sessions, ended };
 }
 
+test("本局结束后全员准备才能开始下一局", () => {
+  const { rooms, sessions, ended } = startEarlySettlementRoom();
+  assert.throws(
+    () => rooms.startNextRound(ended.roomCode, sessions[0]!.playerToken),
+    (error) => error instanceof RoomError && error.code === "READY_REQUIRED",
+  );
+  readyAllForNextRound(rooms, sessions);
+  const next = rooms.startNextRound(ended.roomCode, sessions[0]!.playerToken);
+  assert.equal(next.game?.roundNumber, 2);
+});
+
 test("提前结算投票可以拒绝且拒绝后正常开始下一局", () => {
   const { rooms, sessions, ended } = startEarlySettlementRoom();
   const requested = rooms.requestEarlySettlement(ended.roomCode, sessions[1]!.playerToken).snapshot;
@@ -695,6 +731,7 @@ test("提前结算投票可以拒绝且拒绝后正常开始下一局", () => {
   assert.equal(rejected.match.status, "active");
   assert.equal(rejected.match.earlySettlement?.status, "rejected");
   assert.deepEqual(rejected.match.earlySettlement?.rejectedSeats, [3]);
+  readyAllForNextRound(rooms, sessions);
   const next = rooms.startNextRound(ended.roomCode, sessions[0]!.playerToken);
   assert.equal(next.game?.roundNumber, 2);
   assert.equal(next.match.earlySettlement, undefined);
@@ -715,10 +752,10 @@ test("另外三人全部同意后提前整场结算且重连恢复投票状态",
   assert.equal(approved.match.endReason, "early_agreement");
   assert.equal(approved.match.earlySettlement?.status, "approved");
   assert.deepEqual(approved.match.rankings, [
-    { seat: 0, score: 200, rank: 1 },
-    { seat: 1, score: 200, rank: 1 },
-    { seat: 2, score: 200, rank: 1 },
-    { seat: 3, score: 200, rank: 1 },
+    { seat: 0, score: 100, rank: 1 },
+    { seat: 1, score: 100, rank: 1 },
+    { seat: 2, score: 100, rank: 1 },
+    { seat: 3, score: 100, rank: 1 },
   ]);
   assert.throws(
     () => rooms.startNextRound(ended.roomCode, sessions[0]!.playerToken),
@@ -766,7 +803,7 @@ test("暗杠移除四张手牌、公开副露并从牌墙尾部补牌", () => {
   assert.equal(result.snapshot.game?.wallRemaining, 82);
   assert.equal(result.snapshot.game?.handTileCounts[0], 11);
   assert.deepEqual(result.snapshot.game?.scoreDeltas, [12, -4, -4, -4]);
-  assert.deepEqual(result.snapshot.scoreTotals, [212, 196, 196, 196]);
+  assert.deepEqual(result.snapshot.scoreTotals, [112, 96, 96, 96]);
   assert.deepEqual(result.snapshot.game?.melds, [{
     seat: 0,
     kind: "gang",
@@ -790,7 +827,7 @@ test("局中解散必须四人一致且保留已结算杠分但不计未完成�
   const view = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken);
   const angang = view.game!.availableTurnOperations!.find((option) => option.kind === "angang")!;
   const afterGang = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, angang.id).snapshot;
-  assert.deepEqual(afterGang.scoreTotals, [212, 196, 196, 196]);
+  assert.deepEqual(afterGang.scoreTotals, [112, 96, 96, 96]);
 
   const requested = rooms.requestEarlySettlement(started.roomCode, sessions[1]!.playerToken).snapshot;
   assert.equal(requested.match.earlySettlement?.duringRound, true);
@@ -809,7 +846,7 @@ test("局中解散必须四人一致且保留已结算杠分但不计未完成�
   assert.deepEqual(approved.match.roundHistory, []);
   assert.equal(approved.game?.roundResult?.reason, "dissolved");
   assert.deepEqual(approved.game?.roundResult?.scoreDeltas, [12, -4, -4, -4]);
-  assert.deepEqual(approved.scoreTotals, [212, 196, 196, 196]);
+  assert.deepEqual(approved.scoreTotals, [112, 96, 96, 96]);
   assert.equal(approved.publicActions.at(-1)?.kind, "round_dissolved");
 });
 
@@ -989,7 +1026,7 @@ test("特殊杠全过后成立并允许手中多余字牌连续涨毛", () => {
   assert.equal(secondGrowth.snapshot.game?.melds.length, 1);
   assert.equal(secondGrowth.snapshot.game?.melds[0]?.growthCount, 2);
   assert.deepEqual(secondGrowth.snapshot.game?.scoreDeltas, [12, -4, -4, -4]);
-  assert.deepEqual(secondGrowth.snapshot.scoreTotals, [212, 196, 196, 196]);
+  assert.deepEqual(secondGrowth.snapshot.scoreTotals, [112, 96, 96, 96]);
   assert.deepEqual(secondGrowth.snapshot.game?.melds[0]?.tiles, ["red", "green", "white", "red", "green"]);
 });
 

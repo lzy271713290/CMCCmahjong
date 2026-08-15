@@ -27,6 +27,7 @@
           <button id="gender-preview" class="gender-preview" type="button" aria-label="试听报牌声音">试听</button>
         </div>
         <label>整场局数<select id="match-rounds"><option value="8">8局</option><option value="16">16局</option></select></label>
+        <label>开局分<input id="start-score" type="number" min="50" max="1000" step="10" value="100" inputmode="numeric" /></label>
         <button id="create" class="primary">创建房间</button>
         <div class="divider"><span>或加入朋友的房间</span></div>
         <label>六位房间号<input id="room-code" inputmode="numeric" maxlength="6" placeholder="000000" /></label>
@@ -55,13 +56,18 @@
     <section id="game-screen" class="game-screen hidden" aria-label="麻将桌">
       <div class="table-board">
         <div class="table-hud">
-          <div class="hud-room"><span>房间</span><strong id="game-room-code">------</strong><span id="game-match-progress">第1/8局</span></div>
+          <div class="hud-room">
+            <div class="hud-room-top"><span>房间</span><strong id="game-room-code">------</strong><span id="game-match-progress">第1/8局</span></div>
+            <div class="hud-room-bottom">剩余牌 <strong id="wall-status">83</strong> 张</div>
+          </div>
           <div id="round-label" class="round-label">第1局</div>
           <div class="hud-actions">
             <button id="share-room" class="hud-button" type="button" aria-label="邀请好友" title="邀请好友">邀</button>
             <button id="rules-game" class="hud-button" type="button" aria-label="查看规则" title="查看规则">规</button>
             <button id="history-game" class="hud-button" type="button" aria-label="查看牌局记录" title="查看牌局记录">记</button>
             <button id="request-dissolve" class="hud-button" type="button" aria-label="申请解散牌局" title="申请解散牌局">散</button>
+            <button id="voice-mic" class="hud-button" type="button" aria-pressed="false" aria-label="打开麦克风" title="打开麦克风">麦</button>
+            <button id="voice-speaker" class="hud-button" type="button" aria-pressed="true" aria-label="打开喇叭" title="打开喇叭">喇</button>
             <button id="sound-toggle" class="hud-button" type="button" aria-label="声音设置" aria-expanded="false" title="声音设置">声</button>
             <button id="fullscreen-toggle" class="hud-button" type="button" aria-label="全屏横屏" title="全屏横屏">全</button>
             <span id="game-connection" class="status">连接中</span>
@@ -93,8 +99,7 @@
           <span id="wind-right" class="center-wind wind-right">西</span>
           <span id="wind-bottom" class="center-wind wind-bottom">东</span>
           <span id="wind-left" class="center-wind wind-left">南</span>
-          <div class="wall-count"><strong id="wall-status">83</strong><span>余牌</span></div>
-          <div class="action-countdown"><strong id="action-countdown">--</strong><span>秒</span></div>
+          <div class="center-countdown"><strong id="action-countdown">--</strong><span>秒</span></div>
           <div id="turn-status" class="turn-status">等待开局</div>
         </div>
 
@@ -102,6 +107,12 @@
         <div id="action-banner" class="action-banner hidden" aria-live="assertive"></div>
         <div id="table-effect" class="table-effect hidden" aria-hidden="true"></div>
         <div id="score-summary" class="score-summary hidden" aria-live="polite"></div>
+        <div id="payment-detail-overlay" class="payment-detail-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="payment-detail-title">
+          <article>
+            <header><strong id="payment-detail-title">支付明细</strong><button id="payment-detail-close" type="button" aria-label="关闭">×</button></header>
+            <div id="payment-detail-list"></div>
+          </article>
+        </div>
         <div class="self-area">
           <div id="self-hand" class="self-hand" aria-label="我的手牌"></div>
         </div>
@@ -120,12 +131,12 @@
       <article class="rules-card">
         <header><div><span class="eyebrow">开局前看一分钟</span><h2 id="rules-title">玩法与操作说明</h2></div><button id="rules-close-x" class="rules-close-x" type="button" aria-label="关闭">×</button></header>
         <div class="rules-grid">
-          <section><h3>怎么开始</h3><p>房主选择 8 局或 16 局并分享房间链接。四名真人都在线且准备后，由房主开局。</p></section>
+          <section><h3>怎么开始</h3><p>房主选择 8 局或 16 局，可设置 50-1000 开局分（默认100），并分享房间链接。四名真人都在线且准备后，由房主开局。</p></section>
           <section><h3>轮到你时</h3><p>点击手牌出牌；出牌限时30秒，吃碰杠胡响应限时12秒。响应超时自动过，出牌超时优先打刚摸的牌。</p></section>
           <section><h3>响应顺序</h3><p>胡优先于杠、碰、吃；只有弃牌者的下家能吃。多人同时可胡时按当前规则结算。</p></section>
           <section><h3>本项目规则</h3><p>支持普通胡、七对、自摸、点炮、明杠、暗杠、加杠、抢杠胡，以及中发白和东南西北两类特殊杠、涨毛。</p></section>
-          <section><h3>结算与断线</h3><p>任意玩家可申请解散，四人一致同意才结束；未完成局不计局数，已结算杠分保留。掉线90秒进入托管，重连立即接管。</p></section>
-          <section><h3>声音与特效</h3><p>牌桌提供34张牌真人语音、男声/女声切换、吃碰杠胡报音、背景音乐、结算特效和粒子动画；点击右上角“声”可分别开关。</p></section>
+          <section><h3>结算与断线</h3><p>任意玩家可申请解散，四人一致同意才结束；未完成局不计局数，已结算杠分保留。掉线90秒进入托管，重连立即接管。每局结束后所有真人需点“准备下一局”，房主才能开始下一局；结算矩阵中点击数字可查看支付明细。</p></section>
+          <section><h3>声音与特效</h3><p>牌桌提供34张牌真人语音、男声/女声切换、吃碰杠胡报音、背景音乐、结算特效和粒子动画；点击右上角“声”可分别开关。牌桌右上角的“麦/喇”可开麦说话和收听其他开麦玩家，麦克风需要 HTTPS 页面。</p></section>
           <section><h3>房间管理</h3><p>等待时可退出，房主退出会自动转给下一位真人；误加测试玩家可一键移除。牌局进行中请勿主动退出。</p></section>
         </div>
         <button id="rules-close" class="primary" type="button">知道了，开始打牌</button>

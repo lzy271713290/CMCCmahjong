@@ -109,6 +109,7 @@ export type PublicActionView = {
 };
 export type MatchView = {
   totalRounds: MatchMode;
+  startScore: number;
   completedRounds: number;
   status: "waiting" | "active" | "completed";
   endReason?: "round_limit" | "negative_score" | "early_agreement";
@@ -176,7 +177,7 @@ export type RoomSnapshot = {
 };
 
 export type ClientMessage =
-  | { type: "create_room"; name: string; totalRounds?: MatchMode }
+  | { type: "create_room"; name: string; totalRounds?: MatchMode; startScore?: number }
   | { type: "join_room"; roomCode: string; name: string }
   | { type: "reconnect"; roomCode: string; playerToken: string }
   | { type: "set_ready"; ready: boolean }
@@ -190,6 +191,8 @@ export type ClientMessage =
   | { type: "discard_tile"; tile: TileCode }
   | { type: "react_to_discard"; operationId: string | "pass" }
   | { type: "perform_turn_operation"; operationId: string }
+  | { type: "voice_audio"; data: string; mimeType: string }
+  | { type: "voice_state"; micOn: boolean; speakerOn: boolean }
   | { type: "ping" };
 
 export type ServerMessage =
@@ -204,5 +207,7 @@ export type ServerMessage =
   | { type: "left_room" }
   | { type: "room_closed"; roomCode: string; reason: string }
   | { type: "room_announcement"; message: string }
+  | { type: "voice_audio"; fromSeat: number; data: string; mimeType: string }
+  | { type: "voice_state"; fromSeat: number; micOn: boolean; speakerOn: boolean }
   | { type: "error"; code: string; message: string }
   | { type: "pong" };

@@ -1,5 +1,6 @@
-import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ScoreFactor, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ScoreFactor, ScorePaymentView, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import { MahjongAudioManager, type ActionVoice, type AudioMonitorEvent, type EffectSound, type VoiceGender } from "./audio-manager.js";
+import { VoiceChannel } from "./voice-channel.js";
 import { PUBLIC_REPLAY_FORMAT, parsePublicReplay, type PublicReplayPlayer, type PublicReplayRecord } from "./public-replay.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
@@ -98,6 +99,13 @@ const historyCloseButton = required<HTMLButtonElement>("history-close");
 const historyCloseXButton = required<HTMLButtonElement>("history-close-x");
 const requestDissolveButton = required<HTMLButtonElement>("request-dissolve");
 const actionCountdown = required<HTMLElement>("action-countdown");
+const startScoreInput = required<HTMLInputElement>("start-score");
+const voiceMicButton = required<HTMLButtonElement>("voice-mic");
+const voiceSpeakerButton = required<HTMLButtonElement>("voice-speaker");
+const paymentDetailOverlay = required<HTMLElement>("payment-detail-overlay");
+const paymentDetailTitle = required<HTMLElement>("payment-detail-title");
+const paymentDetailList = required<HTMLElement>("payment-detail-list");
+const paymentDetailClose = required<HTMLButtonElement>("payment-detail-close");
 const dissolveOverlay = required<HTMLElement>("dissolve-overlay");
 const dissolveDetail = required<HTMLElement>("dissolve-detail");
 const dissolveActions = required<HTMLElement>("dissolve-actions");
@@ -118,6 +126,8 @@ let lastServerMessageAt = Date.now();
 let reconnectFeedbackPending = false;
 let importedReplay: PublicReplayRecord | undefined;
 let historySource: HistorySource | undefined;
+const voiceChannel = new VoiceChannel({ send: sendVoiceJson, notice: showNotice });
+const voiceStates = new Map<number, { micOn: boolean; speakerOn: boolean }>();
 let historyCursor = 0;
 let historyPlaybackTimer: number | undefined;
 let countdownTimer: number | undefined;
@@ -181,6 +191,12 @@ function connect(): void {
   });
 }
 
+function sendVoiceJson(message: object): boolean {
+  if (socket?.readyState !== WebSocket.OPEN) return false;
+  socket.send(JSON.stringify(message));
+  return true;
+}
+
 function send(message: object, trackRequest = true): boolean {
   if (socket?.readyState !== WebSocket.OPEN) {
     showNotice("还没有连上服务器，请稍等");
@@ -209,6 +225,9 @@ function send(message: object, trackRequest = true): boolean {
 function handleMessage(message: ServerMessage): void {
   if (message.type === "session") {
     clearPendingRequest();
+    voiceChannel.reset();
+    voiceStates.clear();
+    syncVoiceButtons();
     saved = { roomCode: message.roomCode, playerId: message.playerId, playerToken: message.playerToken };
     localStorage.setItem("mahjong-session", JSON.stringify(saved));
     render(message.snapshot);
@@ -234,6 +253,8 @@ function handleMessage(message: ServerMessage): void {
     showNotice(message.message);
   } else if (message.type === "left_room") {
     clearPendingRequest();
+    voiceChannel.reset();
+    voiceStates.clear();
     localStorage.removeItem("mahjong-session");
     saved = undefined;
     snapshot = undefined;
@@ -242,6 +263,8 @@ function handleMessage(message: ServerMessage): void {
     showNotice("已退出房间");
   } else if (message.type === "room_closed") {
     clearPendingRequest();
+    voiceChannel.reset();
+    voiceStates.clear();
     localStorage.removeItem("mahjong-session");
     saved = undefined;
     snapshot = undefined;
@@ -250,6 +273,11 @@ function handleMessage(message: ServerMessage): void {
     showNotice(`房间 ${message.roomCode} 已由管理员解散：${message.reason}`);
   } else if (message.type === "room_announcement") {
     showNotice(`管理员公告：${message.message}`);
+  } else if (message.type === "voice_audio") {
+    voiceChannel.handleAudio(message.fromSeat, message.data, message.mimeType);
+  } else if (message.type === "voice_state") {
+    voiceStates.set(message.fromSeat, { micOn: message.micOn, speakerOn: message.speakerOn });
+    document.querySelector<HTMLElement>(`.player-seat[data-seat="${message.fromSeat}"]`)?.classList.toggle("voice-mic", message.micOn);
   } else if (message.type === "pong") {
     setConnection("已连接", true);
   }
@@ -265,7 +293,7 @@ function render(next: RoomSnapshot): void {
   room.classList.toggle("hidden", isPlaying);
   gameScreen.classList.toggle("hidden", !isPlaying);
   currentCode.textContent = next.roomCode;
-  matchModeLabel.textContent = `${next.match.totalRounds}局`;
+  matchModeLabel.textContent = `${next.match.totalRounds}局 · ${next.match.startScore ?? 100}分起`;
   gameRoomCode.textContent = next.roomCode;
   gameMatchProgress.textContent = `第${next.game?.roundNumber ?? 1}/${next.match.totalRounds}局`;
 
@@ -355,6 +383,8 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     const position = positionForSeat(player.seat, viewerSeat);
     const playerSeat = document.createElement("div");
     playerSeat.className = `player-seat seat-${position}${game.turnSeat === player.seat ? " active" : ""}${player.connected ? "" : " offline"}${player.autoManaged ? " managed" : ""}`;
+    playerSeat.dataset.seat = String(player.seat);
+    if (voiceStates.get(player.seat)?.micOn) playerSeat.classList.add("voice-mic");
 
     const avatar = document.createElement("div");
     avatar.className = "avatar";
@@ -362,7 +392,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     const info = document.createElement("div");
     info.className = "player-info";
     const role = player.seat === game.dealerSeat ? "庄" : winds[(player.seat - game.dealerSeat + 4) % 4];
-    info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张 · ${next.scoreTotals[player.seat] ?? 200}分${player.isTestPlayer ? " · 测试" : player.autoManaged ? " · 托管" : ""}</span>`;
+    info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张 · ${next.scoreTotals[player.seat] ?? 100}分${player.isTestPlayer ? " · 测试" : player.autoManaged ? " · 托管" : ""}</span>`;
     info.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
     playerSeat.append(avatar, info);
 
@@ -543,40 +573,71 @@ function renderScoreSummary(next: RoomSnapshot): void {
   scoreSummary.append(header);
 
   const scoreboard = document.createElement("div");
-  scoreboard.className = "settlement-scoreboard";
-  const orderedPlayers = [...next.players].sort((left, right) => {
-    const leftRank = next.match.rankings?.find((ranking) => ranking.seat === left.seat)?.rank ?? left.seat + 1;
-    const rightRank = next.match.rankings?.find((ranking) => ranking.seat === right.seat)?.rank ?? right.seat + 1;
-    return leftRank - rightRank || (next.scoreTotals[right.seat] ?? 0) - (next.scoreTotals[left.seat] ?? 0);
-  });
-  for (const player of orderedPlayers) {
+  scoreboard.className = "settlement-matrix";
+  const headerRow = document.createElement("div");
+  headerRow.className = "matrix-row matrix-header";
+  const headerName = document.createElement("span");
+  headerName.textContent = "玩家";
+  headerRow.append(headerName);
+  for (const player of next.players) {
+    const cell = document.createElement("span");
+    cell.textContent = player.name;
+    headerRow.append(cell);
+  }
+  const roundHeader = document.createElement("span");
+  roundHeader.textContent = "本局";
+  const totalHeader = document.createElement("span");
+  totalHeader.textContent = "累计";
+  headerRow.append(roundHeader, totalHeader);
+  scoreboard.append(headerRow);
+
+  const payments = result.payments ?? game.scorePayments ?? [];
+  const matrix = Array.from({ length: 4 }, () => [0, 0, 0, 0]);
+  for (const payment of payments) {
+    matrix[payment.fromSeat]![payment.toSeat] = (matrix[payment.fromSeat]?.[payment.toSeat] ?? 0) - payment.amount;
+    matrix[payment.toSeat]![payment.fromSeat] = (matrix[payment.toSeat]?.[payment.fromSeat] ?? 0) + payment.amount;
+  }
+  const seatPlayers = [...next.players].sort((left, right) => left.seat - right.seat);
+  for (const rowPlayer of seatPlayers) {
     const row = document.createElement("div");
-    const ranking = next.match.rankings?.find((candidate) => candidate.seat === player.seat);
-    const delta = game.scoreDeltas[player.seat] ?? 0;
-    row.className = `${player.id === saved?.playerId ? "is-me" : ""}${result.winnerSeats.includes(player.seat) ? " is-winner" : ""}`;
-    row.innerHTML = `<b>${ranking ? `第${ranking.rank}名` : winds[(player.seat - game.dealerSeat + 4) % 4]}</b><strong></strong><span class="round-delta ${delta > 0 ? "positive" : delta < 0 ? "negative" : ""}">${delta >= 0 ? "+" : ""}${delta}</span><em>${next.scoreTotals[player.seat] ?? 200}分</em>`;
-    row.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+    row.className = `matrix-row${rowPlayer.id === saved?.playerId ? " is-me" : ""}${result.winnerSeats.includes(rowPlayer.seat) ? " is-winner" : ""}`;
+    const nameCell = document.createElement("span");
+    nameCell.className = "matrix-name";
+    nameCell.textContent = rowPlayer.id === saved?.playerId ? `${rowPlayer.name}（我）` : rowPlayer.name;
+    row.append(nameCell);
+    for (const columnPlayer of seatPlayers) {
+      const cell = document.createElement("span");
+      cell.className = "matrix-cell";
+      if (rowPlayer.seat === columnPlayer.seat) {
+        cell.textContent = "—";
+        cell.classList.add("matrix-diagonal");
+      } else {
+        const value = matrix[rowPlayer.seat]?.[columnPlayer.seat] ?? 0;
+        if (value === 0) {
+          cell.textContent = "0";
+          cell.classList.add("matrix-zero");
+        } else {
+          const button = document.createElement("button");
+          button.type = "button";
+          button.className = `matrix-cell-button ${value > 0 ? "positive" : "negative"}`;
+          button.textContent = `${value > 0 ? "+" : ""}${value}`;
+          button.addEventListener("click", () => openPaymentDetail(rowPlayer.seat, columnPlayer.seat, value, payments, next));
+          cell.append(button);
+        }
+      }
+      row.append(cell);
+    }
+    const delta = game.scoreDeltas[rowPlayer.seat] ?? 0;
+    const deltaCell = document.createElement("span");
+    deltaCell.className = `matrix-total round-delta ${delta > 0 ? "positive" : delta < 0 ? "negative" : ""}`;
+    deltaCell.textContent = `${delta >= 0 ? "+" : ""}${delta}`;
+    const totalCell = document.createElement("span");
+    totalCell.className = "matrix-total";
+    totalCell.textContent = String(next.scoreTotals[rowPlayer.seat] ?? next.match.startScore ?? 100);
+    row.append(deltaCell, totalCell);
     scoreboard.append(row);
   }
   scoreSummary.append(scoreboard);
-
-  if (result.payments?.length) {
-    const paymentDetails = document.createElement("details");
-    paymentDetails.className = "payment-details";
-    const paymentSummary = document.createElement("summary");
-    paymentSummary.textContent = `查看支付明细（${result.payments.length}笔）`;
-    const detail = document.createElement("small");
-    detail.textContent = result.payments
-      .map((payment) => {
-        const from = next.players.find((player) => player.seat === payment.fromSeat)?.name ?? `${payment.fromSeat + 1}号位`;
-        const to = next.players.find((player) => player.seat === payment.toSeat)?.name ?? `${payment.toSeat + 1}号位`;
-        const formula = scoreFactorFormula(payment.factors);
-        return `${from}→${to} ${payment.amount}分${formula ? `（${formula}）` : ""}`;
-      })
-      .join(" · ");
-    paymentDetails.append(paymentSummary, detail);
-    scoreSummary.append(paymentDetails);
-  }
 
   const me = next.players.find((player) => player.id === saved?.playerId);
   const vote = next.match.earlySettlement;
@@ -650,16 +711,33 @@ function renderScoreSummary(next: RoomSnapshot): void {
     footer.append(requestSettlement);
   }
 
-  if (me?.isHost && next.match.status !== "completed" && vote?.status !== "voting") {
-    const nextRound = document.createElement("button");
-    nextRound.type = "button";
-    nextRound.className = "next-round-button";
-    nextRound.textContent = "开始下一局";
-    nextRound.addEventListener("click", () => {
-      nextRound.disabled = true;
-      send({ type: "start_next_round" });
+  if (next.match.status !== "completed" && vote?.status !== "voting" && game.stage === "round_ended") {
+    const readyCount = next.players.filter((player) => player.ready).length;
+    const allReady = next.players.every((player) => player.ready);
+    const myReady = Boolean(me?.ready);
+    const readyButton = document.createElement("button");
+    readyButton.type = "button";
+    readyButton.className = myReady ? "request-settlement-button" : "next-round-button";
+    readyButton.textContent = myReady ? `已准备下一局（${readyCount}/4）` : "准备下一局";
+    readyButton.disabled = myReady;
+    readyButton.addEventListener("click", () => {
+      readyButton.disabled = true;
+      send({ type: "set_ready", ready: !myReady });
     });
-    footer.append(nextRound);
+    footer.append(readyButton);
+    if (me?.isHost) {
+      const nextRound = document.createElement("button");
+      nextRound.type = "button";
+      nextRound.className = "next-round-button";
+      nextRound.disabled = !allReady;
+      nextRound.textContent = allReady ? "开始下一局" : `等待全员准备（${readyCount}/4）`;
+      nextRound.addEventListener("click", () => {
+        if (!allReady) return;
+        nextRound.disabled = true;
+        send({ type: "start_next_round" });
+      });
+      footer.append(nextRound);
+    }
   }
 
   if (next.match.status === "completed") {
@@ -1039,6 +1117,8 @@ async function toggleFullscreen(): Promise<void> {
 
 function showLobby(): void {
   snapshot = undefined;
+  voiceChannel.reset();
+  voiceStates.clear();
   audioManager.setInGame(false);
   setAudioSettingsVisible(false);
   document.body.classList.remove("in-game");
@@ -1084,9 +1164,55 @@ const scoreFactorLabels: Record<ScoreFactor, string> = {
   zhangmao: "涨毛1分",
 };
 
+const scoreReasonLabels: Record<string, string> = {
+  self_draw: "自摸",
+  discard_hu: "点炮胡",
+  rob_kong_hu: "抢杠胡",
+  ming_gang: "明杠",
+  an_gang: "暗杠",
+  jia_gang: "加杠",
+  special_gang: "特殊杠",
+  zhangmao: "涨毛",
+};
+
 function scoreFactorFormula(factors: ScoreFactor[] | undefined): string {
   if (!factors?.length) return "";
   return factors.map((factor) => scoreFactorLabels[factor]).join(" × ");
+}
+
+function openPaymentDetail(rowSeat: number, columnSeat: number, value: number, payments: ScorePaymentView[], next: RoomSnapshot): void {
+  const rowName = playerName(next, rowSeat);
+  const columnName = playerName(next, columnSeat);
+  const relevant = value < 0
+    ? payments.filter((payment) => payment.fromSeat === rowSeat && payment.toSeat === columnSeat)
+    : payments.filter((payment) => payment.fromSeat === columnSeat && payment.toSeat === rowSeat);
+  paymentDetailTitle.textContent = value < 0 ? `${rowName} 支付给 ${columnName}` : `${rowName} 从 ${columnName} 获得`;
+  paymentDetailList.replaceChildren();
+  if (relevant.length === 0) {
+    const empty = document.createElement("p");
+    empty.textContent = "没有对应支付记录";
+    paymentDetailList.append(empty);
+  } else {
+    for (const payment of relevant) {
+      const item = document.createElement("div");
+      item.className = "payment-detail-item";
+      const heading = document.createElement("strong");
+      heading.textContent = `${value < 0 ? "-" : "+"}${payment.amount} 分 · ${scoreReasonLabels[payment.reason] ?? payment.reason}`;
+      const formula = scoreFactorFormula(payment.factors);
+      const body = document.createElement("small");
+      body.textContent = formula || `${payment.fromSeat + 1}号位 → ${payment.toSeat + 1}号位`;
+      item.append(heading, body);
+      paymentDetailList.append(item);
+    }
+  }
+  paymentDetailOverlay.classList.remove("hidden");
+}
+
+function syncVoiceButtons(): void {
+  voiceMicButton.classList.toggle("active", voiceChannel.micOn);
+  voiceMicButton.setAttribute("aria-pressed", String(voiceChannel.micOn));
+  voiceSpeakerButton.classList.toggle("active", voiceChannel.speakerOn);
+  voiceSpeakerButton.setAttribute("aria-pressed", String(voiceChannel.speakerOn));
 }
 
 function setRulesVisible(visible: boolean): void {
@@ -1309,7 +1435,8 @@ async function exportPublicHistory(): Promise<void> {
 createButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   localStorage.setItem("mahjong-nickname", nameInput.value.trim());
-  send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16 });
+  const startScore = Number(startScoreInput.value);
+  send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16, startScore: Number.isFinite(startScore) ? startScore : 100 });
 });
 joinButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
@@ -1348,6 +1475,7 @@ for (const toggle of [voiceToggle, effectsToggle, musicToggle]) {
   toggle.addEventListener("change", () => {
     audioManager.updateSettings({ voice: voiceToggle.checked, effects: effectsToggle.checked, music: musicToggle.checked });
     syncAudioSettingsUI();
+    syncVoiceButtons();
   });
 }
 voicePreviewButton.addEventListener("click", () => {
@@ -1375,6 +1503,22 @@ voiceGenderGameSelect.addEventListener("change", () => {
   syncAudioSettingsUI();
 });
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
+voiceMicButton.addEventListener("click", async () => {
+  const result = await voiceChannel.toggleMic();
+  voiceMicButton.classList.toggle("active", result.micOn);
+  voiceMicButton.setAttribute("aria-pressed", String(result.micOn));
+  sendVoiceJson({ type: "voice_state", micOn: result.micOn, speakerOn: voiceChannel.speakerOn });
+});
+voiceSpeakerButton.addEventListener("click", () => {
+  const result = voiceChannel.toggleSpeaker();
+  voiceSpeakerButton.classList.toggle("active", result.speakerOn);
+  voiceSpeakerButton.setAttribute("aria-pressed", String(result.speakerOn));
+  sendVoiceJson({ type: "voice_state", micOn: voiceChannel.micOn, speakerOn: result.speakerOn });
+});
+paymentDetailClose.addEventListener("click", () => paymentDetailOverlay.classList.add("hidden"));
+paymentDetailOverlay.addEventListener("click", (event) => {
+  if (event.target === paymentDetailOverlay) paymentDetailOverlay.classList.add("hidden");
+});
 reconnectNowButton.addEventListener("click", forceReconnect);
 requestDissolveButton.addEventListener("click", () => {
   requestDissolveButton.disabled = true;

@@ -3,7 +3,7 @@ import { findDiscardReactionOptions } from "../dist/server/src/game-model.js";
 
 const args = process.argv.slice(2).filter((arg) => arg !== "--");
 const serverUrl = args[0] ?? "ws://127.0.0.1:3000/ws";
-const expectedVersion = args[1] ?? "persist-control-v17";
+const expectedVersion = args[1] ?? "ui-voice-v18";
 const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
 
 function open() {
@@ -111,6 +111,15 @@ const gameStarted = gameStartedMessages[0];
 const earlyNextRoundWait = next(first, "error", (message) => message.code === "ROUND_ACTIVE");
 first.send(JSON.stringify({ type: "start_next_round" }));
 const earlyNextRoundError = await earlyNextRoundWait;
+
+const voiceStateWait = next(restoredSocket, "voice_state", (message) => message.fromSeat === 0);
+first.send(JSON.stringify({ type: "voice_state", micOn: true, speakerOn: true }));
+const voiceStateMessage = await voiceStateWait;
+
+const voiceAudioWait = next(restoredSocket, "voice_audio", (message) => message.fromSeat === 0);
+first.send(JSON.stringify({ type: "voice_audio", data: "dGVzdA==", mimeType: "audio/webm" }));
+const voiceAudioMessage = await voiceAudioWait;
+
 const earlySettlementWaits = connections.map((connection) => next(
   connection.socket,
   "snapshot",
@@ -163,7 +172,7 @@ const playingRestoredSocket = await open();
 const playingRestoredWait = next(playingRestoredSocket, "session");
 playingRestoredSocket.send(JSON.stringify({ type: "reconnect", roomCode: created.roomCode, playerToken: joined.playerToken }));
 const playingRestored = await playingRestoredWait;
-const [tileAssetResponse, tableAssetResponse, voiceAssetResponse, musicAssetResponse, effectAssetResponse, replayModuleResponse, audioModuleResponse] = await Promise.all([
+const [tileAssetResponse, tableAssetResponse, voiceAssetResponse, musicAssetResponse, effectAssetResponse, replayModuleResponse, audioModuleResponse, voiceChannelModuleResponse] = await Promise.all([
   fetch(`${httpBaseUrl}/assets/babykylin/MJ/bottom/Z_bottom.png`),
   fetch(`${httpBaseUrl}/assets/babykylin/table/mahjong_table.jpg`),
   fetch(`${httpBaseUrl}/assets/babykylin/sounds/nv/11.mp3`),
@@ -171,6 +180,7 @@ const [tileAssetResponse, tableAssetResponse, voiceAssetResponse, musicAssetResp
   fetch(`${httpBaseUrl}/assets/babykylin/efx/hu_glow4.png`),
   fetch(`${httpBaseUrl}/public-replay.js`),
   fetch(`${httpBaseUrl}/audio-manager.js`),
+  fetch(`${httpBaseUrl}/voice-channel.js`),
 ]);
 const [tileAsset, tableAsset, voiceAsset, musicAsset, effectAsset] = await Promise.all([
   tileAssetResponse.arrayBuffer(),
@@ -181,6 +191,7 @@ const [tileAsset, tableAsset, voiceAsset, musicAsset, effectAsset] = await Promi
 ]);
 const replayModule = await replayModuleResponse.text();
 const audioModule = await audioModuleResponse.text();
+const voiceChannelModule = await voiceChannelModuleResponse.text();
 const healthResponse = await fetch(`${httpBaseUrl}/healthz`);
 const health = await healthResponse.json();
 
@@ -194,9 +205,12 @@ const result = {
   gamePhase: gameStarted.snapshot.phase,
   modelVersion: gameStarted.snapshot.game?.modelVersion,
   matchRounds: gameStarted.snapshot.match?.totalRounds,
+  startScore: gameStarted.snapshot.match?.startScore,
   earlyNextRoundRejected: earlyNextRoundError.code === "ROUND_ACTIVE",
   earlySettlementDuringRoundAllowed: earlySettlementMessages.every((message) => message.snapshot.game?.actionDeadlineAt === undefined),
   earlySettlementRejectedAndResumed: settlementRejectedMessages.every((message) => typeof message.snapshot.game?.actionDeadlineAt === "number"),
+  voiceStateRelayed: voiceStateMessage.micOn === true && voiceStateMessage.speakerOn === true,
+  voiceAudioRelayed: voiceAudioMessage.fromSeat === 0 && voiceAudioMessage.data === "dGVzdA==" && voiceAudioMessage.mimeType === "audio/webm",
   wallRemaining: gameStarted.snapshot.game?.wallRemaining,
   handTileCounts: gameStarted.snapshot.game?.handTileCounts,
   hostPrivateHandCount: gameStarted.snapshot.game?.selfHand?.length,
@@ -219,6 +233,7 @@ const result = {
   effectAsset: { contentType: effectAssetResponse.headers.get("content-type"), bytes: effectAsset.byteLength },
   replayModule: { status: replayModuleResponse.status, contentType: replayModuleResponse.headers.get("content-type"), parserExported: replayModule.includes("export function parsePublicReplay") },
   audioModule: { status: audioModuleResponse.status, contentType: audioModuleResponse.headers.get("content-type"), managerExported: audioModule.includes("export class MahjongAudioManager") },
+  voiceChannelModule: { status: voiceChannelModuleResponse.status, contentType: voiceChannelModuleResponse.headers.get("content-type"), managerExported: voiceChannelModule.includes("export class VoiceChannel") },
   health: { status: healthResponse.status, ok: health.ok, modelVersion: health.modelVersion, instanceIdLength: health.instanceId?.length },
 };
 console.log(JSON.stringify(result));
@@ -236,7 +251,10 @@ if (
   result.gamePhase !== "playing" ||
   result.modelVersion !== expectedVersion ||
   result.matchRounds !== 16 ||
+  result.startScore !== 100 ||
   !result.earlyNextRoundRejected ||
+  !result.voiceStateRelayed ||
+  !result.voiceAudioRelayed ||
   !result.earlySettlementDuringRoundAllowed ||
   !result.earlySettlementRejectedAndResumed ||
   result.wallRemaining !== 83 ||
@@ -270,6 +288,9 @@ if (
   result.audioModule.status !== 200 ||
   !result.audioModule.contentType?.includes("javascript") ||
   !result.audioModule.managerExported ||
+  result.voiceChannelModule.status !== 200 ||
+  !result.voiceChannelModule.contentType?.includes("javascript") ||
+  !result.voiceChannelModule.managerExported ||
   result.health.status !== 200 ||
   !result.health.ok ||
   result.health.modelVersion !== expectedVersion ||

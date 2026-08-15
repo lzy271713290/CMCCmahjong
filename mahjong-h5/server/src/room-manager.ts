@@ -36,6 +36,7 @@ type Room = {
   hostPlayerId: string;
   players: Player[];
   scoreTotals: number[];
+  startScore: number;
   totalRounds: MatchMode;
   completedRounds: number;
   matchEndReason?: "round_limit" | "negative_score" | "early_agreement";
@@ -60,6 +61,9 @@ export type Session = {
   snapshot: RoomSnapshot;
   autoManagementReleased?: boolean;
 };
+
+export const START_SCORE_MIN = 50;
+export const START_SCORE_MAX = 1000;
 
 export const DISCARD_TIMEOUT_MS = 30_000;
 export const REACTION_TIMEOUT_MS = 12_000;
@@ -285,9 +289,10 @@ export class RoomManager {
     private readonly store?: RoomStore,
   ) {}
 
-  createRoom(rawName: string, totalRounds: MatchMode = 8): Session {
+  createRoom(rawName: string, totalRounds: MatchMode = 8, startScore = 100): Session {
     const name = this.normalizeName(rawName);
     if (totalRounds !== 8 && totalRounds !== 16) throw new RoomError("MATCH_MODE_INVALID", "房间局数只能选择8局或16局");
+    const normalizedStartScore = this.normalizeStartScore(startScore);
     const code = this.createCode();
     const player = this.createPlayer(name, 0);
     const room: Room = {
@@ -296,7 +301,8 @@ export class RoomManager {
       phase: "waiting",
       hostPlayerId: player.id,
       players: [player],
-      scoreTotals: [200, 200, 200, 200],
+      scoreTotals: [normalizedStartScore, normalizedStartScore, normalizedStartScore, normalizedStartScore],
+      startScore: normalizedStartScore,
       totalRounds,
       completedRounds: 0,
       roundHistory: [],
@@ -385,7 +391,8 @@ export class RoomManager {
 
   setReady(rawCode: string, playerToken: string, ready: boolean): RoomSnapshot {
     const room = this.getRoom(rawCode);
-    if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始");
+    const roundEnded = room.game?.stage === "round_ended" && !room.matchEndReason;
+    if (room.phase !== "waiting" && !roundEnded) throw new RoomError("GAME_STARTED", "本局已经开始");
     const player = room.players.find((candidate) => candidate.token === playerToken);
     if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
     if (player.ready !== ready) {
@@ -463,6 +470,7 @@ export class RoomManager {
     if (room.matchEndReason) throw new RoomError("MATCH_ENDED", "整场游戏已经结束");
     if (room.earlySettlement?.status === "voting") throw new RoomError("EARLY_SETTLEMENT_PENDING", "提前结算投票尚未结束");
     if (room.game.stage !== "round_ended" || !room.game.roundResult) throw new RoomError("ROUND_ACTIVE", "本局尚未结束");
+    if (!room.players.every((player) => player.ready)) throw new RoomError("READY_REQUIRED", "需要所有玩家准备后才能开始下一局");
 
     const previous = room.game;
     const previousResult = previous.roundResult;
@@ -1129,7 +1137,10 @@ export class RoomManager {
     const earlySettlement = earlySettlementRaw
       ? { ...earlySettlementRaw, responses: new Map(earlySettlementRaw.responses) }
       : undefined;
-    return { ...raw, earlySettlement, game } as Room;
+    const startScore = typeof raw.startScore === "number" && Number.isInteger(raw.startScore)
+      ? this.normalizeStartScore(raw.startScore)
+      : 100;
+    return { ...raw, startScore, earlySettlement, game } as Room;
   }
 
   private buildSnapshot(room: Room, viewer?: Player): RoomSnapshot {
@@ -1156,6 +1167,7 @@ export class RoomManager {
       })),
       match: {
         totalRounds: room.totalRounds,
+        startScore: room.startScore,
         completedRounds: room.completedRounds,
         status: room.matchEndReason ? "completed" : room.phase === "playing" ? "active" : "waiting",
         endReason: room.matchEndReason,
@@ -1464,7 +1476,7 @@ export class RoomManager {
     game.scorePayments.push(...payments);
     for (let seat = 0; seat < 4; seat += 1) {
       game.scoreDeltas[seat] = (game.scoreDeltas[seat] ?? 0) + (deltas[seat] ?? 0);
-      room.scoreTotals[seat] = (room.scoreTotals[seat] ?? 200) + (deltas[seat] ?? 0);
+      room.scoreTotals[seat] = (room.scoreTotals[seat] ?? room.startScore) + (deltas[seat] ?? 0);
     }
   }
 
@@ -1511,14 +1523,30 @@ export class RoomManager {
       scoreDeltas: [...game.scoreDeltas],
       scoreTotals: [...room.scoreTotals],
     });
-    if (room.scoreTotals.some((score) => score < 0)) room.matchEndReason = "negative_score";
-    else if (room.completedRounds >= room.totalRounds) room.matchEndReason = "round_limit";
+    if (room.scoreTotals.some((score) => score < 0)) {
+      room.matchEndReason = "negative_score";
+      return;
+    }
+    if (room.completedRounds >= room.totalRounds) {
+      room.matchEndReason = "round_limit";
+      return;
+    }
+    for (const player of room.players) {
+      player.ready = player.isTestPlayer;
+    }
   }
 
   private calculateRankings(scoreTotals: readonly number[]): MatchRankingView[] {
     return scoreTotals
       .map((score, seat) => ({ seat, score, rank: 1 + scoreTotals.filter((candidate) => candidate > score).length }))
       .sort((left, right) => left.rank - right.rank || left.seat - right.seat);
+  }
+
+  private normalizeStartScore(value: number): number {
+    if (!Number.isInteger(value) || value < START_SCORE_MIN || value > START_SCORE_MAX) {
+      throw new RoomError("START_SCORE_INVALID", `开局分需为${START_SCORE_MIN}到${START_SCORE_MAX}的整数`);
+    }
+    return value;
   }
 
   private getRoom(rawCode: string): Room {

@@ -15,7 +15,7 @@ const adminToken = process.env.ADMIN_TOKEN;
 const roomStore = new RoomStore(process.env.REDIS_URL);
 const manager = new RoomManager(undefined, undefined, undefined, roomStore);
 const socketsByToken = new Map<string, WebSocket>();
-const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string }>();
+const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string; seat: number }>();
 const projectRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const publicAssetsRoot = join(projectRoot, "client/public/assets");
 
@@ -167,6 +167,7 @@ const server = createServer(async (request, response) => {
     return;
   }
   if (pathname === "/app.js") filePath = join(projectRoot, "dist/client/src/app.js");
+  else if (pathname === "/voice-channel.js") filePath = join(projectRoot, "dist/client/src/voice-channel.js");
   else if (pathname === "/audio-manager.js") filePath = join(projectRoot, "dist/client/src/audio-manager.js");
   else if (pathname === "/public-replay.js") filePath = join(projectRoot, "dist/client/src/public-replay.js");
   else if (pathname === "/styles.css") filePath = join(projectRoot, "client/public/styles.css");
@@ -225,6 +226,24 @@ function notifyRoomClosed(roomCode: string, reason: string): void {
   }
 }
 
+function relayVoice(roomCode: string, sender: WebSocket, payload: Extract<ServerMessage, { type: "voice_audio" }>): void {
+  let recipients = 0;
+  for (const [socket, session] of sessionsBySocket) {
+    if (session.roomCode !== roomCode || socket === sender || socket.readyState !== socket.OPEN) continue;
+    socket.send(JSON.stringify(payload));
+    recipients += 1;
+  }
+  if (recipients > 0) logInfo("voice_relayed", { roomCode, fromSeat: payload.fromSeat, recipients });
+}
+
+function broadcastVoiceState(roomCode: string, fromSeat: number, micOn: boolean, speakerOn: boolean): void {
+  const payload: ServerMessage = { type: "voice_state", fromSeat, micOn, speakerOn };
+  for (const [socket, session] of sessionsBySocket) {
+    if (session.roomCode !== roomCode) continue;
+    send(socket, payload);
+  }
+}
+
 function announceToRoom(roomCode: string, messageText: string): number {
   let recipients = 0;
   for (const [socket, session] of sessionsBySocket) {
@@ -240,7 +259,8 @@ function bindSession(socket: WebSocket, session: Session, connectionId: string, 
   const oldSocket = socketsByToken.get(session.playerToken);
   if (oldSocket && oldSocket !== socket) oldSocket.close(4001, "已在新连接恢复");
   socketsByToken.set(session.playerToken, socket);
-  sessionsBySocket.set(socket, { roomCode: session.roomCode, playerToken: session.playerToken });
+  const boundSeat = session.snapshot.players.find((player) => player.id === session.playerId)?.seat ?? 0;
+  sessionsBySocket.set(socket, { roomCode: session.roomCode, playerToken: session.playerToken, seat: boundSeat });
   send(socket, { type: "session", ...session });
   broadcast(session.roomCode);
   logInfo(event, {
@@ -275,7 +295,7 @@ function bindSession(socket: WebSocket, session: Session, connectionId: string, 
   }
 }
 
-function requireSession(socket: WebSocket): { roomCode: string; playerToken: string } {
+function requireSession(socket: WebSocket): { roomCode: string; playerToken: string; seat: number } {
   const session = sessionsBySocket.get(socket);
   if (!session) throw new RoomError("SESSION_REQUIRED", "请先创建或加入房间");
   return session;
@@ -323,7 +343,7 @@ webSockets.on("connection", (socket) => {
       requestedRoomCode = "roomCode" in message ? message.roomCode : undefined;
       switch (message.type) {
         case "create_room": {
-          const session = manager.createRoom(message.name, message.totalRounds);
+          const session = manager.createRoom(message.name, message.totalRounds, message.startScore);
           bindSession(socket, session, connectionId, "room_created");
           break;
         }
@@ -411,6 +431,24 @@ webSockets.on("connection", (socket) => {
             revision: snapshot.revision,
           });
           logInfo("game_started", { connectionId, roomCode: session.roomCode, playerCount: snapshot.players.length, revision: snapshot.revision });
+          break;
+        }
+        case "voice_audio": {
+          const session = requireSession(socket);
+          if (typeof message.data !== "string" || !message.data || typeof message.mimeType !== "string") {
+            throw new RoomError("VOICE_INVALID", "语音数据格式无效");
+          }
+          relayVoice(session.roomCode, socket, {
+            type: "voice_audio",
+            fromSeat: session.seat,
+            data: message.data.slice(0, 512 * 1024),
+            mimeType: message.mimeType.slice(0, 120),
+          });
+          break;
+        }
+        case "voice_state": {
+          const session = requireSession(socket);
+          broadcastVoiceState(session.roomCode, session.seat, Boolean(message.micOn), Boolean(message.speakerOn));
           break;
         }
         case "start_next_round": {

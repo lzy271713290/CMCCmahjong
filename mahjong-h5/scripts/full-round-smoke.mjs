@@ -2,7 +2,7 @@ import WebSocket from "ws";
 
 const args = process.argv.slice(2).filter((arg) => arg !== "--");
 const serverUrl = args[0] ?? "ws://127.0.0.1:3000/ws";
-const expectedVersion = args[1] ?? "persist-control-v17";
+const expectedVersion = args[1] ?? "ui-voice-v18";
 const timeoutMs = 12_000;
 
 function openSocket() {
