@@ -201,6 +201,10 @@ try {
     matchStatus: leader.latest.match.status,
     matchEndReason: leader.latest.match.endReason,
     rankingCount: leader.latest.match.rankings?.length,
+    publicActionCount: leader.latest.publicActions.length,
+    firstPublicAction: leader.latest.publicActions[0]?.kind,
+    lastPublicAction: leader.latest.publicActions.at(-1)?.kind,
+    publicActionsPrivateDataFree: !/playerToken|selfHand/.test(JSON.stringify(leader.latest.publicActions)),
   };
   console.log(JSON.stringify(result));
 
@@ -216,6 +220,10 @@ try {
     result.matchStatus !== "completed" ||
     result.matchEndReason !== "early_agreement" ||
     result.rankingCount !== 4 ||
+    result.publicActionCount < 90 ||
+    result.firstPublicAction !== "round_started" ||
+    result.lastPublicAction !== "settlement_agreed" ||
+    !result.publicActionsPrivateDataFree ||
     (expectedVersion && result.modelVersion !== expectedVersion)
   ) {
     process.exitCode = 1;

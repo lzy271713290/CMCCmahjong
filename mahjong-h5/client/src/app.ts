@@ -1,4 +1,4 @@
-import type { PlayerView, ReactionOption, RoomSnapshot, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
 type TablePosition = "bottom" | "right" | "top" | "left";
@@ -49,6 +49,12 @@ const rulesGameButton = required<HTMLButtonElement>("rules-game");
 const rulesOverlay = required<HTMLElement>("rules-overlay");
 const rulesCloseButton = required<HTMLButtonElement>("rules-close");
 const rulesCloseXButton = required<HTMLButtonElement>("rules-close-x");
+const historyGameButton = required<HTMLButtonElement>("history-game");
+const historyOverlay = required<HTMLElement>("history-overlay");
+const historyList = required<HTMLOListElement>("history-list");
+const historyExportButton = required<HTMLButtonElement>("history-export");
+const historyCloseButton = required<HTMLButtonElement>("history-close");
+const historyCloseXButton = required<HTMLButtonElement>("history-close-x");
 
 let socket: WebSocket | undefined;
 let saved = loadSession();
@@ -240,6 +246,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
   renderOperations(game.availableOperations ?? [], game.availableTurnOperations ?? []);
   renderScoreSummary(next);
+  renderActionHistory(next);
 
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
   if (next.match.status === "completed") {
@@ -896,6 +903,92 @@ function setRulesVisible(visible: boolean): void {
   if (visible) rulesCloseButton.focus();
 }
 
+function setHistoryVisible(visible: boolean): void {
+  historyOverlay.classList.toggle("hidden", !visible);
+  if (visible) {
+    if (snapshot) renderActionHistory(snapshot);
+    historyCloseButton.focus();
+  }
+}
+
+function describePublicAction(action: PublicActionView, roomSnapshot: RoomSnapshot): string {
+  const seatName = (seat: number | undefined) => seat === undefined ? "玩家" : playerName(roomSnapshot, seat);
+  const winners = action.seats?.map((seat) => seatName(seat)).join("、") ?? "";
+  const tile = action.tile ? ` ${tileLabel(action.tile)}` : "";
+  switch (action.kind) {
+    case "round_started": return `${seatName(action.seat)}坐庄，第${action.roundNumber}局开始`;
+    case "discard": return `${seatName(action.seat)}打出${tile}`;
+    case "chi": return `${seatName(action.seat)}吃牌${tile}`;
+    case "peng": return `${seatName(action.seat)}碰牌${tile}`;
+    case "ming_gang": return `${seatName(action.seat)}明杠${tile}`;
+    case "an_gang": return `${seatName(action.seat)}暗杠`;
+    case "jia_gang": return `${seatName(action.seat)}加杠${tile}`;
+    case "special_gang": return `${seatName(action.seat)}完成特殊杠`;
+    case "zhangmao": return `${seatName(action.seat)}涨毛`;
+    case "self_draw_hu": return `${winners}自摸${tile}`;
+    case "discard_hu": return `${winners}胡${seatName(action.fromSeat)}打出的${tile}`;
+    case "rob_kong_hu": return `${winners}抢杠胡${tile}`;
+    case "round_ended": return winners ? `本局结束，赢家：${winners}` : "牌墙耗尽，本局流局";
+    case "settlement_requested": return `${seatName(action.seat)}申请提前结算`;
+    case "settlement_agreed": return `${seatName(action.seat)}同意提前结算`;
+    case "settlement_rejected": return `${seatName(action.seat)}拒绝提前结算`;
+    case "player_disconnected": return `${seatName(action.seat)}暂时离线`;
+    case "player_reconnected": return `${seatName(action.seat)}已重连`;
+  }
+}
+
+function renderActionHistory(roomSnapshot: RoomSnapshot): void {
+  historyList.replaceChildren();
+  const actions = roomSnapshot.publicActions.slice(-60).reverse();
+  if (actions.length === 0) {
+    const empty = document.createElement("li");
+    empty.className = "empty-history";
+    empty.textContent = "开局后的公开操作会显示在这里";
+    historyList.append(empty);
+    return;
+  }
+  for (const action of actions) {
+    const item = document.createElement("li");
+    const sequence = document.createElement("b");
+    sequence.textContent = `#${action.sequence}`;
+    const description = document.createElement("span");
+    description.textContent = describePublicAction(action, roomSnapshot);
+    item.append(sequence, description);
+    historyList.append(item);
+  }
+}
+
+async function exportPublicHistory(): Promise<void> {
+  if (!snapshot) return;
+  const record = {
+    format: "cmccmahjong-public-replay-v1",
+    exportedAt: new Date().toISOString(),
+    roomCode: snapshot.roomCode,
+    modelVersion: snapshot.game?.modelVersion,
+    match: snapshot.match,
+    players: snapshot.players.map(({ name, seat, isTestPlayer }) => ({ name, seat, isTestPlayer })),
+    scoreTotals: snapshot.scoreTotals,
+    publicActions: snapshot.publicActions,
+  };
+  const json = JSON.stringify(record, null, 2);
+  let copied = false;
+  try {
+    await copyText(json);
+    copied = true;
+  } catch {
+    // 下载仍可作为剪贴板不可用时的后备方案。
+  }
+  const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `mahjong-${snapshot.roomCode}-public-record.json`;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
+  showNotice(copied ? "公共记录已复制，并尝试下载JSON" : "公共记录已尝试下载JSON");
+}
+
 createButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16 });
@@ -944,8 +1037,18 @@ rulesCloseXButton.addEventListener("click", () => setRulesVisible(false));
 rulesOverlay.addEventListener("click", (event) => {
   if (event.target === rulesOverlay) setRulesVisible(false);
 });
+historyGameButton.addEventListener("click", () => setHistoryVisible(true));
+historyCloseButton.addEventListener("click", () => setHistoryVisible(false));
+historyCloseXButton.addEventListener("click", () => setHistoryVisible(false));
+historyExportButton.addEventListener("click", exportPublicHistory);
+historyOverlay.addEventListener("click", (event) => {
+  if (event.target === historyOverlay) setHistoryVisible(false);
+});
 document.addEventListener("keydown", (event) => {
-  if (event.key === "Escape") setRulesVisible(false);
+  if (event.key === "Escape") {
+    setRulesVisible(false);
+    setHistoryVisible(false);
+  }
 });
 window.addEventListener("online", () => {
   if (socket?.readyState !== WebSocket.OPEN) forceReconnect();

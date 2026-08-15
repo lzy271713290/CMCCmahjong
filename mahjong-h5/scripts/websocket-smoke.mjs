@@ -182,6 +182,8 @@ const result = {
   wallAfterFirstDiscard: dealerAfterDiscard.snapshot.game?.wallRemaining,
   discardCountAfterSecondTurn: secondDiscardMessages[0].snapshot.game?.discards.length,
   wallAfterSecondDiscard: secondDiscardMessages[0].snapshot.game?.wallRemaining,
+  publicActionCount: secondDiscardMessages[0].snapshot.publicActions?.length,
+  publicActionsPrivateDataFree: !/playerToken|selfHand/.test(JSON.stringify(secondDiscardMessages[0].snapshot.publicActions)),
   playingHandRestored: JSON.stringify(playingRestored.snapshot.game?.selfHand) === JSON.stringify(originalPlayingHand),
   tileAsset: { contentType: tileAssetResponse.headers.get("content-type"), bytes: tileAsset.byteLength },
   tableAsset: { contentType: tableAssetResponse.headers.get("content-type"), bytes: tableAsset.byteLength },
@@ -200,7 +202,7 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "friend-ready-v10" ||
+  result.modelVersion !== "replay-ready-v11" ||
   result.matchRounds !== 16 ||
   !result.earlyNextRoundRejected ||
   !result.earlySettlementDuringRoundRejected ||
@@ -216,6 +218,8 @@ if (
   result.wallAfterFirstDiscard !== 82 ||
   result.discardCountAfterSecondTurn !== 2 ||
   result.wallAfterSecondDiscard !== 81 ||
+  result.publicActionCount < 3 ||
+  !result.publicActionsPrivateDataFree ||
   !result.playingHandRestored ||
   result.tileAsset.contentType !== "image/png" ||
   result.tileAsset.bytes < 100_000 ||
@@ -223,7 +227,7 @@ if (
   result.tableAsset.bytes < 100_000 ||
   result.health.status !== 200 ||
   !result.health.ok ||
-  result.health.modelVersion !== "friend-ready-v10" ||
+  result.health.modelVersion !== "replay-ready-v11" ||
   result.health.instanceIdLength !== 8
 ) {
   process.exitCode = 1;

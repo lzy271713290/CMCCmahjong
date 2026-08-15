@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from "node:crypto";
-import type { DiscardView, MatchMode, MatchRankingView, MeldView, ReactionOption, RoomSnapshot, RoundHistoryView, ScorePaymentView, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { DiscardView, MatchMode, MatchRankingView, MeldView, PublicActionKind, PublicActionView, ReactionOption, RoomSnapshot, RoundHistoryView, ScorePaymentView, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import {
   analyzeWinningHand,
   createInitialGame,
@@ -35,6 +35,8 @@ type Room = {
   completedRounds: number;
   matchEndReason?: "round_limit" | "negative_score" | "early_agreement";
   roundHistory: RoundHistoryView[];
+  publicActions: PublicActionView[];
+  nextActionSequence: number;
   earlySettlement?: {
     requesterSeat: number;
     status: "voting" | "rejected" | "approved";
@@ -171,6 +173,8 @@ export class RoomManager {
       totalRounds,
       completedRounds: 0,
       roundHistory: [],
+      publicActions: [],
+      nextActionSequence: 1,
     };
     this.rooms.set(code, room);
     return this.toSession(room, player);
@@ -198,6 +202,7 @@ export class RoomManager {
     if (!player) throw new RoomError("TOKEN_INVALID", "原座位已失效，请重新加入");
     if (!player.connected) {
       player.connected = true;
+      if (room.game) this.recordPublicAction(room, { kind: "player_reconnected", seat: player.seat });
       room.revision += 1;
     }
     return this.toSession(room, player);
@@ -208,6 +213,7 @@ export class RoomManager {
     const player = room?.players.find((candidate) => candidate.token === playerToken);
     if (room && player?.connected) {
       player.connected = false;
+      if (room.game) this.recordPublicAction(room, { kind: "player_disconnected", seat: player.seat });
       room.revision += 1;
     }
   }
@@ -307,6 +313,7 @@ export class RoomManager {
       this.gameRandomIndex,
     );
     room.phase = "playing";
+    this.recordPublicAction(room, { kind: "round_started", roundNumber: room.game.roundNumber, seat: dealerSeat });
     room.revision += 1;
     return this.snapshot(room.code);
   }
@@ -337,6 +344,7 @@ export class RoomManager {
     nextGame.roundNumber = nextRoundNumber;
     room.game = nextGame;
     room.earlySettlement = undefined;
+    this.recordPublicAction(room, { kind: "round_started", roundNumber: nextRoundNumber, seat: nextDealerSeat });
     room.revision += 1;
     return this.snapshot(room.code);
   }
@@ -354,6 +362,7 @@ export class RoomManager {
     const responses = new Map<number, boolean>([[player.seat, true], ...autoApprovedSeats.map((seat) => [seat, true] as const)]);
     const status = responses.size === room.players.length ? "approved" : "voting";
     room.earlySettlement = { requesterSeat: player.seat, status, responses };
+    this.recordPublicAction(room, { kind: "settlement_requested", seat: player.seat });
     if (status === "approved") room.matchEndReason = "early_agreement";
     room.revision += 1;
     return {
@@ -378,6 +387,7 @@ export class RoomManager {
     if (vote.responses.has(player.seat)) throw new RoomError("EARLY_SETTLEMENT_ALREADY_SENT", "你已经对提前结算表态");
 
     vote.responses.set(player.seat, agree);
+    this.recordPublicAction(room, { kind: agree ? "settlement_agreed" : "settlement_rejected", seat: player.seat });
     if (!agree) vote.status = "rejected";
     else if (vote.responses.size === room.players.length) {
       vote.status = "approved";
@@ -418,6 +428,11 @@ export class RoomManager {
     const progress: AutomaticProgress = { autoDiscards: [], reactionWindows: [] };
     this.progressFromDiscard(room, { seat: player.seat, tile: tileCode }, progress);
     this.updateMatchAfterRound(room);
+    this.recordPublicAction(room, { kind: "discard", seat: player.seat, tile: tileCode });
+    for (const automatic of progress.autoDiscards) {
+      this.recordPublicAction(room, { kind: "discard", seat: automatic.seat, tile: automatic.tile });
+    }
+    this.recordRoundEndedAction(room);
     room.revision += 1;
     const nextTurnSeat = room.game.lastDraw ? room.game.turnSeat : undefined;
     return {
@@ -545,6 +560,17 @@ export class RoomManager {
     if (meld && option.kind !== "zimo") this.recordKongPayments(room, player.seat, option.kind);
 
     this.updateMatchAfterRound(room);
+    if (option.kind === "zimo") {
+      this.recordPublicAction(room, { kind: "self_draw_hu", seats: [player.seat], tile });
+    } else if (meld) {
+      this.recordPublicAction(room, {
+        kind: this.publicKindForMeld(meld),
+        seat: player.seat,
+        fromSeat: meld.fromSeat,
+        tile: meld.gangType === "an" ? undefined : tile,
+      });
+    }
+    this.recordRoundEndedAction(room);
     room.revision += 1;
     return {
       snapshot: this.snapshot(room.code),
@@ -649,6 +675,25 @@ export class RoomManager {
     }
 
     this.updateMatchAfterRound(room);
+    if (resolution === "discard_hu" || resolution === "rob_kong_hu") {
+      this.recordPublicAction(room, {
+        kind: resolution,
+        seats: winningSeats,
+        fromSeat: pending.discard.seat,
+        tile: pending.discard.tile,
+      });
+    } else if (claimedMeld) {
+      this.recordPublicAction(room, {
+        kind: this.publicKindForMeld(claimedMeld),
+        seat: claimedMeld.seat,
+        fromSeat: claimedMeld.fromSeat,
+        tile: pending.discard.tile,
+      });
+    }
+    for (const automatic of progress.autoDiscards) {
+      this.recordPublicAction(room, { kind: "discard", seat: automatic.seat, tile: automatic.tile });
+    }
+    this.recordRoundEndedAction(room);
     room.revision += 1;
     const nextTurnSeat = game.pendingReaction || game.roundResult ? undefined : game.turnSeat;
     return {
@@ -696,8 +741,12 @@ export class RoomManager {
           connected: player.connected,
           isHost: player.id === room.hostPlayerId,
           isTestPlayer: player.isTestPlayer,
-        })),
+      })),
       scoreTotals: [...room.scoreTotals],
+      publicActions: room.publicActions.map((action) => ({
+        ...action,
+        seats: action.seats ? [...action.seats] : undefined,
+      })),
       match: {
         totalRounds: room.totalRounds,
         completedRounds: room.completedRounds,
@@ -970,6 +1019,36 @@ export class RoomManager {
       game.scoreDeltas[seat] = (game.scoreDeltas[seat] ?? 0) + (deltas[seat] ?? 0);
       room.scoreTotals[seat] = (room.scoreTotals[seat] ?? 200) + (deltas[seat] ?? 0);
     }
+  }
+
+  private recordPublicAction(
+    room: Room,
+    action: Omit<PublicActionView, "sequence" | "roundNumber"> & { roundNumber?: number },
+  ): void {
+    room.publicActions.push({
+      sequence: room.nextActionSequence,
+      roundNumber: action.roundNumber ?? room.game?.roundNumber,
+      ...action,
+    });
+    room.nextActionSequence += 1;
+    if (room.publicActions.length > 200) room.publicActions.splice(0, room.publicActions.length - 200);
+  }
+
+  private recordRoundEndedAction(room: Room): void {
+    const game = room.game;
+    if (!game || game.stage !== "round_ended" || !game.roundResult) return;
+    const latest = room.publicActions.at(-1);
+    if (latest?.kind === "round_ended" && latest.roundNumber === game.roundNumber) return;
+    this.recordPublicAction(room, { kind: "round_ended", seats: [...game.roundResult.winnerSeats] });
+  }
+
+  private publicKindForMeld(meld: MeldView): PublicActionKind {
+    if (meld.kind === "chi") return "chi";
+    if (meld.kind === "peng") return "peng";
+    if (meld.kind === "special_gang") return meld.growthCount ? "zhangmao" : "special_gang";
+    if (meld.gangType === "an") return "an_gang";
+    if (meld.gangType === "jia") return "jia_gang";
+    return "ming_gang";
   }
 
   private updateMatchAfterRound(room: Room): void {

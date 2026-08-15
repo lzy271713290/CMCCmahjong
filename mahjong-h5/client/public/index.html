@@ -50,6 +50,7 @@
           <div class="hud-actions">
             <button id="share-room" class="hud-button" type="button" aria-label="邀请好友" title="邀请好友">邀</button>
             <button id="rules-game" class="hud-button" type="button" aria-label="查看规则" title="查看规则">规</button>
+            <button id="history-game" class="hud-button" type="button" aria-label="查看牌局记录" title="查看牌局记录">记</button>
             <button id="sound-toggle" class="hud-button" type="button" aria-label="关闭音效" title="音效">声</button>
             <button id="fullscreen-toggle" class="hud-button" type="button" aria-label="全屏横屏" title="全屏横屏">全</button>
             <span id="game-connection" class="status">连接中</span>
@@ -102,6 +103,15 @@
           <section><h3>房间管理</h3><p>等待时可退出，房主退出会自动转给下一位真人；误加测试玩家可一键移除。牌局进行中请勿主动退出。</p></section>
         </div>
         <button id="rules-close" class="primary" type="button">知道了，开始打牌</button>
+      </article>
+    </div>
+
+    <div id="history-overlay" class="rules-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="history-title">
+      <article class="rules-card history-card">
+        <header><div><span class="eyebrow">服务端权威记录</span><h2 id="history-title">牌局公开时间线</h2></div><button id="history-close-x" class="rules-close-x" type="button" aria-label="关闭牌局记录">×</button></header>
+        <p class="history-privacy">仅包含公开动作、座位和牌桌结果，不包含任何玩家手牌或身份令牌。</p>
+        <ol id="history-list" class="action-history-list"></ol>
+        <footer class="history-actions"><button id="history-export" type="button">复制并导出记录</button><button id="history-close" class="primary" type="button">返回牌桌</button></footer>
       </article>
     </div>
 

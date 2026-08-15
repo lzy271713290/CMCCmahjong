@@ -56,6 +56,14 @@ button.compact { width: auto; padding: 9px 12px; font-size: 13px; }
 .rules-grid section { padding: 12px 14px; border: 1px solid rgba(130,186,166,.2); border-radius: 10px; background: rgba(0,20,17,.28); }
 .rules-grid h3 { margin: 0 0 5px; color: #f2d98f; font-size: 14px; }
 .rules-grid p { margin: 0; color: #c4d9d1; font-size: 12px; line-height: 1.65; }
+.history-card { display: flex; width: min(560px,100%); flex-direction: column; overflow: hidden; }
+.history-privacy { margin: 2px 0 12px; color: #9fc2b6; font-size: 11px; line-height: 1.55; }
+.action-history-list { display: grid; min-height: 110px; flex: 1; gap: 5px; overflow: auto; margin: 0; padding: 0; list-style: none; }
+.action-history-list li { display: grid; grid-template-columns: 46px 1fr; gap: 9px; padding: 8px 10px; border-radius: 8px; background: rgba(0,20,17,.3); color: #d7e8e2; font-size: 12px; line-height: 1.45; }
+.action-history-list b { color: #d8bd69; font-family: ui-monospace, Consolas, monospace; font-size: 10px; }
+.action-history-list .empty-history { display: block; padding: 25px; color: #91afa5; text-align: center; }
+.history-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 14px; }
+.history-actions button { padding: 10px; }
 
 /* 对局桌面 */
 body.in-game { overflow: hidden; background: #062f2b; }

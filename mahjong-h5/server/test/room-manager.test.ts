@@ -703,6 +703,10 @@ test("暗杠移除四张手牌、公开副露并从牌墙尾部补牌", () => {
     fromSeat: 0,
     hiddenTileCount: 4,
   }]);
+  const publicAngang = result.snapshot.publicActions.find((action) => action.kind === "an_gang");
+  assert.equal(publicAngang?.seat, 0);
+  assert.equal(publicAngang?.tile, undefined);
+  assert.equal(JSON.stringify(result.snapshot.publicActions).includes("wan-1"), false);
   const ownerView = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken);
   assert.deepEqual(ownerView.game?.melds[0]?.tiles, ["wan-1", "wan-1", "wan-1", "wan-1"]);
   assert.equal(ownerView.game?.melds[0]?.hiddenTileCount, undefined);
@@ -999,4 +1003,62 @@ test("房主可撤销测试玩家且离线真人不能开局", () => {
   );
   rooms.reconnect(host.roomCode, fourth.playerToken);
   assert.equal(rooms.startGame(host.roomCode, host.playerToken).phase, "playing");
+});
+
+test("公开操作时间线记录开局出牌且所有玩家视图一致", () => {
+  const { rooms, sessions, started } = createDeterministicFourPlayerGame();
+  assert.deepEqual(started.publicActions, [{ sequence: 1, roundNumber: 1, kind: "round_started", seat: 0, seats: undefined }]);
+
+  rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "wan-1");
+  const hostView = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken);
+  const secondView = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+
+  assert.deepEqual(hostView.publicActions, secondView.publicActions);
+  assert.deepEqual(hostView.publicActions.at(-1), {
+    sequence: 2,
+    roundNumber: 1,
+    kind: "discard",
+    seat: 0,
+    tile: "wan-1",
+    seats: undefined,
+  });
+  assert.equal(JSON.stringify(hostView.publicActions).includes("playerToken"), false);
+  assert.equal(JSON.stringify(hostView.publicActions).includes("selfHand"), false);
+});
+
+test("公开操作时间线在断线重连后保留并记录连接变化", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("房主");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+  rooms.setReady(host.roomCode, host.playerToken, true);
+  rooms.startGame(host.roomCode, host.playerToken);
+
+  rooms.disconnect(host.roomCode, host.playerToken);
+  const restored = rooms.reconnect(host.roomCode, host.playerToken);
+
+  assert.deepEqual(restored.snapshot.publicActions.map((action) => action.kind), [
+    "round_started",
+    "player_disconnected",
+    "player_reconnected",
+  ]);
+  assert.deepEqual(restored.snapshot.publicActions.map((action) => action.sequence), [1, 2, 3]);
+});
+
+test("胡牌和本局结束写入公共操作时间线", () => {
+  const { rooms, sessions, started } = startCustomGame(createDiscardHuGame);
+  rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "east");
+  const hu = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken).game!.availableOperations!.find(
+    (option) => option.kind === "hu",
+  )!;
+  const result = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, hu.id);
+
+  assert.deepEqual(result.snapshot.publicActions.map((action) => action.kind), [
+    "round_started",
+    "discard",
+    "discard_hu",
+    "round_ended",
+  ]);
+  assert.deepEqual(result.snapshot.publicActions.at(-2)?.seats, [1]);
+  assert.equal(result.snapshot.publicActions.at(-2)?.fromSeat, 0);
+  assert.equal(result.snapshot.publicActions.at(-2)?.tile, "east");
 });

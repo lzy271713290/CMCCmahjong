@@ -123,6 +123,21 @@ function logMatchEndedIfNeeded(snapshot: Session["snapshot"], connectionId: stri
   });
 }
 
+function logPublicTimelineCheckpointIfRoundEnded(snapshot: Session["snapshot"], connectionId: string, roomCode: string): void {
+  if (snapshot.game?.stage !== "round_ended") return;
+  const latest = snapshot.publicActions.at(-1);
+  logInfo("public_timeline_checkpoint", {
+    connectionId,
+    roomCode,
+    roundNumber: snapshot.game.roundNumber,
+    publicActionCount: snapshot.publicActions.length,
+    latestSequence: latest?.sequence,
+    latestAction: latest?.kind,
+    privacyMode: "public_actions_only",
+    revision: snapshot.revision,
+  });
+}
+
 webSockets.on("connection", (socket) => {
   const connectionId = randomUUID().slice(0, 8);
   logInfo("websocket_connected", { connectionId });
@@ -345,6 +360,7 @@ webSockets.on("connection", (socket) => {
             stage: diagnostics.stage,
             revision: snapshot.revision,
           });
+          logPublicTimelineCheckpointIfRoundEnded(snapshot, connectionId, session.roomCode);
           logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
           break;
         }
@@ -410,6 +426,7 @@ webSockets.on("connection", (socket) => {
               revision: snapshot.revision,
             });
           }
+          logPublicTimelineCheckpointIfRoundEnded(snapshot, connectionId, session.roomCode);
           logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
           break;
         }
@@ -502,6 +519,7 @@ webSockets.on("connection", (socket) => {
             stage: diagnostics.stage,
             revision: snapshot.revision,
           });
+          logPublicTimelineCheckpointIfRoundEnded(snapshot, connectionId, session.roomCode);
           logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
           break;
         }

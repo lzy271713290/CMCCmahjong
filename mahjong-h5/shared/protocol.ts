@@ -60,6 +60,34 @@ export type EarlySettlementView = {
   rejectedSeats: number[];
   waitingSeats: number[];
 };
+export type PublicActionKind =
+  | "round_started"
+  | "discard"
+  | "chi"
+  | "peng"
+  | "ming_gang"
+  | "an_gang"
+  | "jia_gang"
+  | "special_gang"
+  | "zhangmao"
+  | "self_draw_hu"
+  | "discard_hu"
+  | "rob_kong_hu"
+  | "round_ended"
+  | "settlement_requested"
+  | "settlement_agreed"
+  | "settlement_rejected"
+  | "player_disconnected"
+  | "player_reconnected";
+export type PublicActionView = {
+  sequence: number;
+  kind: PublicActionKind;
+  roundNumber?: number;
+  seat?: number;
+  seats?: number[];
+  fromSeat?: number;
+  tile?: TileCode;
+};
 export type MatchView = {
   totalRounds: MatchMode;
   completedRounds: number;
@@ -95,6 +123,7 @@ export type RoomSnapshot = {
   phase: "waiting" | "playing";
   players: PlayerView[];
   scoreTotals: number[];
+  publicActions: PublicActionView[];
   match: MatchView;
   game?: {
     modelVersion: string;
