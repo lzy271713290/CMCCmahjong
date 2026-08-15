@@ -1,5 +1,5 @@
 import { randomInt, randomUUID } from "node:crypto";
-import type { DiscardView, MatchMode, MatchRankingView, MeldView, ReactionOption, RoomSnapshot, ScorePaymentView, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { DiscardView, MatchMode, MatchRankingView, MeldView, ReactionOption, RoomSnapshot, RoundHistoryView, ScorePaymentView, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import {
   analyzeWinningHand,
   createInitialGame,
@@ -33,7 +33,13 @@ type Room = {
   scoreTotals: number[];
   totalRounds: MatchMode;
   completedRounds: number;
-  matchEndReason?: "round_limit" | "negative_score";
+  matchEndReason?: "round_limit" | "negative_score" | "early_agreement";
+  roundHistory: RoundHistoryView[];
+  earlySettlement?: {
+    requesterSeat: number;
+    status: "voting" | "rejected" | "approved";
+    responses: Map<number, boolean>;
+  };
   game?: InitialGameState;
 };
 
@@ -96,6 +102,19 @@ export type TurnOperationProgress = {
   };
 };
 
+export type EarlySettlementProgress = {
+  snapshot: RoomSnapshot;
+  diagnostics: {
+    requesterSeat: number;
+    responderSeat?: number;
+    agree?: boolean;
+    status: "voting" | "rejected" | "approved";
+    approvedCount: number;
+    waitingCount: number;
+    autoApprovedSeats: number[];
+  };
+};
+
 type ReactionWindowDiagnostic = {
   discard: DiscardView;
   eligibleSeats: number[];
@@ -141,6 +160,7 @@ export class RoomManager {
       scoreTotals: [200, 200, 200, 200],
       totalRounds,
       completedRounds: 0,
+      roundHistory: [],
     };
     this.rooms.set(code, room);
     return this.toSession(room, player);
@@ -242,6 +262,7 @@ export class RoomManager {
     if (operator.id !== room.hostPlayerId) throw new RoomError("HOST_REQUIRED", "只有房主可以开始下一局");
     if (room.phase !== "playing" || !room.game) throw new RoomError("GAME_NOT_STARTED", "牌局尚未开始");
     if (room.matchEndReason) throw new RoomError("MATCH_ENDED", "整场游戏已经结束");
+    if (room.earlySettlement?.status === "voting") throw new RoomError("EARLY_SETTLEMENT_PENDING", "提前结算投票尚未结束");
     if (room.game.stage !== "round_ended" || !room.game.roundResult) throw new RoomError("ROUND_ACTIVE", "本局尚未结束");
 
     const previous = room.game;
@@ -259,8 +280,66 @@ export class RoomManager {
     );
     nextGame.roundNumber = nextRoundNumber;
     room.game = nextGame;
+    room.earlySettlement = undefined;
     room.revision += 1;
     return this.snapshot(room.code);
+  }
+
+  requestEarlySettlement(rawCode: string, playerToken: string): EarlySettlementProgress {
+    const room = this.getRoom(rawCode);
+    const player = room.players.find((candidate) => candidate.token === playerToken);
+    if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    if (room.phase !== "playing" || !room.game) throw new RoomError("GAME_NOT_STARTED", "牌局尚未开始");
+    if (room.matchEndReason) throw new RoomError("MATCH_ENDED", "整场游戏已经结束");
+    if (room.game.stage !== "round_ended") throw new RoomError("ROUND_ACTIVE", "请在本局结算后发起提前结算");
+    if (room.earlySettlement?.status === "voting") throw new RoomError("EARLY_SETTLEMENT_PENDING", "已经有一项提前结算投票");
+
+    const autoApprovedSeats = room.players.filter((candidate) => candidate.isTestPlayer).map((candidate) => candidate.seat);
+    const responses = new Map<number, boolean>([[player.seat, true], ...autoApprovedSeats.map((seat) => [seat, true] as const)]);
+    const status = responses.size === room.players.length ? "approved" : "voting";
+    room.earlySettlement = { requesterSeat: player.seat, status, responses };
+    if (status === "approved") room.matchEndReason = "early_agreement";
+    room.revision += 1;
+    return {
+      snapshot: this.snapshot(room.code),
+      diagnostics: {
+        requesterSeat: player.seat,
+        status,
+        approvedCount: responses.size,
+        waitingCount: room.players.length - responses.size,
+        autoApprovedSeats,
+      },
+    };
+  }
+
+  respondEarlySettlement(rawCode: string, playerToken: string, agree: boolean): EarlySettlementProgress {
+    const room = this.getRoom(rawCode);
+    const player = room.players.find((candidate) => candidate.token === playerToken);
+    if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    if (room.matchEndReason) throw new RoomError("MATCH_ENDED", "整场游戏已经结束");
+    const vote = room.earlySettlement;
+    if (!vote || vote.status !== "voting") throw new RoomError("EARLY_SETTLEMENT_NOT_AVAILABLE", "当前没有等待表态的提前结算投票");
+    if (vote.responses.has(player.seat)) throw new RoomError("EARLY_SETTLEMENT_ALREADY_SENT", "你已经对提前结算表态");
+
+    vote.responses.set(player.seat, agree);
+    if (!agree) vote.status = "rejected";
+    else if (vote.responses.size === room.players.length) {
+      vote.status = "approved";
+      room.matchEndReason = "early_agreement";
+    }
+    room.revision += 1;
+    return {
+      snapshot: this.snapshot(room.code),
+      diagnostics: {
+        requesterSeat: vote.requesterSeat,
+        responderSeat: player.seat,
+        agree,
+        status: vote.status,
+        approvedCount: [...vote.responses.values()].filter(Boolean).length,
+        waitingCount: vote.status === "voting" ? room.players.length - vote.responses.size : 0,
+        autoApprovedSeats: [],
+      },
+    };
   }
 
   discardTile(rawCode: string, playerToken: string, tileCode: TileCode): TurnProgress {
@@ -569,6 +648,23 @@ export class RoomManager {
         status: room.matchEndReason ? "completed" : room.phase === "playing" ? "active" : "waiting",
         endReason: room.matchEndReason,
         rankings: room.matchEndReason ? this.calculateRankings(room.scoreTotals) : undefined,
+        roundHistory: room.roundHistory.map((round) => ({
+          ...round,
+          winnerSeats: [...round.winnerSeats],
+          scoreDeltas: [...round.scoreDeltas],
+          scoreTotals: [...round.scoreTotals],
+        })),
+        earlySettlement: room.earlySettlement
+          ? {
+              requesterSeat: room.earlySettlement.requesterSeat,
+              status: room.earlySettlement.status,
+              approvedSeats: [...room.earlySettlement.responses.entries()].filter(([, agree]) => agree).map(([seat]) => seat),
+              rejectedSeats: [...room.earlySettlement.responses.entries()].filter(([, agree]) => !agree).map(([seat]) => seat),
+              waitingSeats: room.earlySettlement.status === "voting"
+                ? room.players.map((player) => player.seat).filter((seat) => !room.earlySettlement?.responses.has(seat))
+                : [],
+            }
+          : undefined,
       },
       game: room.game
         ? {
@@ -823,7 +919,16 @@ export class RoomManager {
   private updateMatchAfterRound(room: Room): void {
     const game = room.game;
     if (!game || game.stage !== "round_ended" || room.completedRounds >= game.roundNumber) return;
+    if (!game.roundResult) throw new Error("本局结束时缺少结算结果");
     room.completedRounds = game.roundNumber;
+    room.roundHistory.push({
+      roundNumber: game.roundNumber,
+      dealerSeat: game.dealerSeat,
+      reason: game.roundResult.reason,
+      winnerSeats: [...game.roundResult.winnerSeats],
+      scoreDeltas: [...game.scoreDeltas],
+      scoreTotals: [...room.scoreTotals],
+    });
     if (room.scoreTotals.some((score) => score < 0)) room.matchEndReason = "negative_score";
     else if (room.completedRounds >= room.totalRounds) room.matchEndReason = "round_limit";
   }

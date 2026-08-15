@@ -44,15 +44,33 @@ export type WinnerScoreView = {
 };
 export type MatchMode = 8 | 16;
 export type MatchRankingView = { seat: number; score: number; rank: number };
+export type RoundEndReason = "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted";
+export type RoundHistoryView = {
+  roundNumber: number;
+  dealerSeat: number;
+  reason: RoundEndReason;
+  winnerSeats: number[];
+  scoreDeltas: number[];
+  scoreTotals: number[];
+};
+export type EarlySettlementView = {
+  requesterSeat: number;
+  status: "voting" | "rejected" | "approved";
+  approvedSeats: number[];
+  rejectedSeats: number[];
+  waitingSeats: number[];
+};
 export type MatchView = {
   totalRounds: MatchMode;
   completedRounds: number;
   status: "waiting" | "active" | "completed";
-  endReason?: "round_limit" | "negative_score";
+  endReason?: "round_limit" | "negative_score" | "early_agreement";
   rankings?: MatchRankingView[];
+  roundHistory: RoundHistoryView[];
+  earlySettlement?: EarlySettlementView;
 };
 export type RoundResultView = {
-  reason: "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted";
+  reason: RoundEndReason;
   winnerSeats: number[];
   fromSeat?: number;
   tile?: TileCode;
@@ -114,6 +132,8 @@ export type ClientMessage =
   | { type: "fill_test_players" }
   | { type: "start_game" }
   | { type: "start_next_round" }
+  | { type: "request_early_settlement" }
+  | { type: "respond_early_settlement"; agree: boolean }
   | { type: "discard_tile"; tile: TileCode }
   | { type: "react_to_discard"; operationId: string | "pass" }
   | { type: "perform_turn_operation"; operationId: string }

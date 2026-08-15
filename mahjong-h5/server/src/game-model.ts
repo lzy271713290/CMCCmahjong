@@ -11,7 +11,7 @@ import type {
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "match-mode-v7";
+export const GAME_MODEL_VERSION = "settlement-vote-v8";
 
 export type Tile = {
   code: TileCode;

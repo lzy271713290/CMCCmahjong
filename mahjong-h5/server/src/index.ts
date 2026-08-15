@@ -209,6 +209,46 @@ webSockets.on("connection", (socket) => {
           });
           break;
         }
+        case "request_early_settlement": {
+          const session = requireSession(socket);
+          const { snapshot, diagnostics } = manager.requestEarlySettlement(session.roomCode, session.playerToken);
+          broadcast(session.roomCode);
+          logInfo("early_settlement_requested", {
+            connectionId,
+            roomCode: session.roomCode,
+            requesterSeat: diagnostics.requesterSeat,
+            status: diagnostics.status,
+            approvedCount: diagnostics.approvedCount,
+            waitingCount: diagnostics.waitingCount,
+            autoApprovedCount: diagnostics.autoApprovedSeats.length,
+            completedRounds: snapshot.match.completedRounds,
+            revision: snapshot.revision,
+          });
+          logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
+          break;
+        }
+        case "respond_early_settlement": {
+          const session = requireSession(socket);
+          const { snapshot, diagnostics } = manager.respondEarlySettlement(
+            session.roomCode,
+            session.playerToken,
+            Boolean(message.agree),
+          );
+          broadcast(session.roomCode);
+          logInfo("early_settlement_response", {
+            connectionId,
+            roomCode: session.roomCode,
+            requesterSeat: diagnostics.requesterSeat,
+            responderSeat: diagnostics.responderSeat,
+            agree: diagnostics.agree,
+            status: diagnostics.status,
+            approvedCount: diagnostics.approvedCount,
+            waitingCount: diagnostics.waitingCount,
+            revision: snapshot.revision,
+          });
+          logMatchEndedIfNeeded(snapshot, connectionId, session.roomCode);
+          break;
+        }
         case "discard_tile": {
           const session = requireSession(socket);
           const result = manager.discardTile(session.roomCode, session.playerToken, message.tile);

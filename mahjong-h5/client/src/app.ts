@@ -328,7 +328,75 @@ function renderScoreSummary(next: RoomSnapshot): void {
   }
 
   const me = next.players.find((player) => player.id === saved?.playerId);
-  if (me?.isHost && next.match.status !== "completed") {
+  const vote = next.match.earlySettlement;
+  if (next.match.roundHistory.length > 0) {
+    const history = document.createElement("details");
+    history.className = "round-history";
+    const summary = document.createElement("summary");
+    summary.textContent = `逐局记录（${next.match.roundHistory.length}局）`;
+    const list = document.createElement("ol");
+    for (const round of [...next.match.roundHistory].reverse()) {
+      const item = document.createElement("li");
+      const winners = round.winnerSeats.length
+        ? round.winnerSeats.map((seat) => next.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`).join("、")
+        : "流局";
+      item.textContent = `第${round.roundNumber}局 ${winners}｜${round.scoreTotals.join(" / ")}`;
+      list.append(item);
+    }
+    history.append(summary, list);
+    scoreSummary.append(history);
+  }
+
+  if (vote) {
+    const voteStatus = document.createElement("div");
+    voteStatus.className = `early-settlement status-${vote.status}`;
+    const requester = next.players.find((player) => player.seat === vote.requesterSeat)?.name ?? `${vote.requesterSeat + 1}号位`;
+    if (vote.status === "voting") {
+      voteStatus.textContent = `${requester}申请提前结算 · 已同意 ${vote.approvedSeats.length}/4`;
+      if (me && vote.waitingSeats.includes(me.seat)) {
+        const actions = document.createElement("div");
+        actions.className = "settlement-actions";
+        const agree = document.createElement("button");
+        agree.type = "button";
+        agree.textContent = "同意结算";
+        const reject = document.createElement("button");
+        reject.type = "button";
+        reject.className = "reject-settlement-button";
+        reject.textContent = "继续打牌";
+        agree.addEventListener("click", () => {
+          agree.disabled = true;
+          reject.disabled = true;
+          send({ type: "respond_early_settlement", agree: true });
+        });
+        reject.addEventListener("click", () => {
+          agree.disabled = true;
+          reject.disabled = true;
+          send({ type: "respond_early_settlement", agree: false });
+        });
+        actions.append(agree, reject);
+        voteStatus.append(actions);
+      }
+    } else if (vote.status === "rejected") {
+      voteStatus.textContent = "提前结算未通过，本场可以继续";
+    } else {
+      voteStatus.textContent = "全员同意提前结算";
+    }
+    scoreSummary.append(voteStatus);
+  }
+
+  if (next.match.status !== "completed" && vote?.status !== "voting") {
+    const requestSettlement = document.createElement("button");
+    requestSettlement.type = "button";
+    requestSettlement.className = "request-settlement-button";
+    requestSettlement.textContent = "申请提前结算";
+    requestSettlement.addEventListener("click", () => {
+      requestSettlement.disabled = true;
+      send({ type: "request_early_settlement" });
+    });
+    scoreSummary.append(requestSettlement);
+  }
+
+  if (me?.isHost && next.match.status !== "completed" && vote?.status !== "voting") {
     const nextRound = document.createElement("button");
     nextRound.type = "button";
     nextRound.className = "next-round-button";

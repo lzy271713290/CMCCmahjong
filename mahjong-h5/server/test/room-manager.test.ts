@@ -76,7 +76,15 @@ test("创建房间可以选择8局或16局模式", () => {
   const rooms = new RoomManager();
   const eight = rooms.createRoom("八局房", 8);
   const sixteen = rooms.createRoom("十六局房", 16);
-  assert.deepEqual(eight.snapshot.match, { totalRounds: 8, completedRounds: 0, status: "waiting", endReason: undefined, rankings: undefined });
+  assert.deepEqual(eight.snapshot.match, {
+    totalRounds: 8,
+    completedRounds: 0,
+    status: "waiting",
+    endReason: undefined,
+    rankings: undefined,
+    roundHistory: [],
+    earlySettlement: undefined,
+  });
   assert.equal(sixteen.snapshot.match.totalRounds, 16);
   assert.throws(
     () => rooms.createRoom("错误房", 12 as 8),
@@ -530,6 +538,15 @@ test("8局模式完成第8局后按累计分并列排名", () => {
     { seat: 2, score: 200, rank: 1 },
     { seat: 3, score: 200, rank: 1 },
   ]);
+  assert.equal(snapshot.match.roundHistory.length, 8);
+  assert.deepEqual(snapshot.match.roundHistory[0], {
+    roundNumber: 1,
+    dealerSeat: 0,
+    reason: "wall_exhausted",
+    winnerSeats: [],
+    scoreDeltas: [0, 0, 0, 0],
+    scoreTotals: [200, 200, 200, 200],
+  });
   assert.throws(
     () => rooms.startNextRound(snapshot.roomCode, sessions[0]!.playerToken),
     (error) => error instanceof RoomError && error.code === "MATCH_ENDED",
@@ -560,6 +577,90 @@ test("16局模式在局末出现负分时提前结束并生成并列排名", () 
     { seat: 2, score: -24, rank: 2 },
     { seat: 3, score: -24, rank: 2 },
   ]);
+  assert.equal(snapshot.match.roundHistory.length, 7);
+  assert.deepEqual(snapshot.match.roundHistory.at(-1)?.scoreTotals, [872, -24, -24, -24]);
+});
+
+function startEarlySettlementRoom(useTestPlayers = false): { rooms: RoomManager; sessions: Session[]; ended: RoomSnapshot } {
+  const rooms = new RoomManager(
+    () => 0,
+    (seats, dealerSeat, _randomIndex, roundNumber) => createImmediateWallExhaustedGame(seats, dealerSeat, roundNumber),
+  );
+  const sessions = [rooms.createRoom("东", 16)];
+  if (useTestPlayers) {
+    rooms.fillWithTestPlayers(sessions[0]!.roomCode, sessions[0]!.playerToken);
+  } else {
+    sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+    sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+    sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  }
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  const started = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
+  assert.throws(
+    () => rooms.requestEarlySettlement(started.roomCode, sessions[0]!.playerToken),
+    (error) => error instanceof RoomError && error.code === "ROUND_ACTIVE",
+  );
+  const ended = rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "wan-1").snapshot;
+  return { rooms, sessions, ended };
+}
+
+test("提前结算投票可以拒绝且拒绝后正常开始下一局", () => {
+  const { rooms, sessions, ended } = startEarlySettlementRoom();
+  const requested = rooms.requestEarlySettlement(ended.roomCode, sessions[1]!.playerToken).snapshot;
+  assert.deepEqual(requested.match.earlySettlement, {
+    requesterSeat: 1,
+    status: "voting",
+    approvedSeats: [1],
+    rejectedSeats: [],
+    waitingSeats: [0, 2, 3],
+  });
+  assert.throws(
+    () => rooms.startNextRound(ended.roomCode, sessions[0]!.playerToken),
+    (error) => error instanceof RoomError && error.code === "EARLY_SETTLEMENT_PENDING",
+  );
+  rooms.respondEarlySettlement(ended.roomCode, sessions[2]!.playerToken, true);
+  const rejected = rooms.respondEarlySettlement(ended.roomCode, sessions[3]!.playerToken, false).snapshot;
+  assert.equal(rejected.match.status, "active");
+  assert.equal(rejected.match.earlySettlement?.status, "rejected");
+  assert.deepEqual(rejected.match.earlySettlement?.rejectedSeats, [3]);
+  const next = rooms.startNextRound(ended.roomCode, sessions[0]!.playerToken);
+  assert.equal(next.game?.roundNumber, 2);
+  assert.equal(next.match.earlySettlement, undefined);
+  assert.equal(next.match.roundHistory.length, 1);
+});
+
+test("另外三人全部同意后提前整场结算且重连恢复投票状态", () => {
+  const { rooms, sessions, ended } = startEarlySettlementRoom();
+  rooms.requestEarlySettlement(ended.roomCode, sessions[0]!.playerToken);
+  rooms.respondEarlySettlement(ended.roomCode, sessions[1]!.playerToken, true);
+  rooms.disconnect(ended.roomCode, sessions[2]!.playerToken);
+  const restored = rooms.reconnect(ended.roomCode, sessions[2]!.playerToken);
+  assert.deepEqual(restored.snapshot.match.earlySettlement?.approvedSeats, [0, 1]);
+  assert.deepEqual(restored.snapshot.match.earlySettlement?.waitingSeats, [2, 3]);
+  rooms.respondEarlySettlement(ended.roomCode, sessions[2]!.playerToken, true);
+  const approved = rooms.respondEarlySettlement(ended.roomCode, sessions[3]!.playerToken, true).snapshot;
+  assert.equal(approved.match.status, "completed");
+  assert.equal(approved.match.endReason, "early_agreement");
+  assert.equal(approved.match.earlySettlement?.status, "approved");
+  assert.deepEqual(approved.match.rankings, [
+    { seat: 0, score: 200, rank: 1 },
+    { seat: 1, score: 200, rank: 1 },
+    { seat: 2, score: 200, rank: 1 },
+    { seat: 3, score: 200, rank: 1 },
+  ]);
+  assert.throws(
+    () => rooms.startNextRound(ended.roomCode, sessions[0]!.playerToken),
+    (error) => error instanceof RoomError && error.code === "MATCH_ENDED",
+  );
+});
+
+test("单人联调的三个测试玩家自动同意提前结算", () => {
+  const { rooms, sessions, ended } = startEarlySettlementRoom(true);
+  const approved = rooms.requestEarlySettlement(ended.roomCode, sessions[0]!.playerToken);
+  assert.equal(approved.diagnostics.autoApprovedSeats.length, 3);
+  assert.equal(approved.snapshot.match.status, "completed");
+  assert.equal(approved.snapshot.match.endReason, "early_agreement");
+  assert.deepEqual(approved.snapshot.match.earlySettlement?.approvedSeats, [0, 1, 2, 3]);
 });
 
 function createConcealedGangGame(): InitialGameState {

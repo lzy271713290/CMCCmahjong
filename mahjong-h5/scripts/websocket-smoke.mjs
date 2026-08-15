@@ -109,6 +109,9 @@ const gameStarted = gameStartedMessages[0];
 const earlyNextRoundWait = next(first, "error", (message) => message.code === "ROUND_ACTIVE");
 first.send(JSON.stringify({ type: "start_next_round" }));
 const earlyNextRoundError = await earlyNextRoundWait;
+const earlySettlementWait = next(first, "error", (message) => message.code === "ROUND_ACTIVE");
+first.send(JSON.stringify({ type: "request_early_settlement" }));
+const earlySettlementError = await earlySettlementWait;
 const dealerSeat = gameStarted.snapshot.game?.dealerSeat;
 const dealerIndex = connections.findIndex((connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === dealerSeat);
 const dealerTile = chooseSafeDiscard(gameStartedMessages, dealerIndex);
@@ -164,6 +167,7 @@ const result = {
   modelVersion: gameStarted.snapshot.game?.modelVersion,
   matchRounds: gameStarted.snapshot.match?.totalRounds,
   earlyNextRoundRejected: earlyNextRoundError.code === "ROUND_ACTIVE",
+  earlySettlementDuringRoundRejected: earlySettlementError.code === "ROUND_ACTIVE",
   wallRemaining: gameStarted.snapshot.game?.wallRemaining,
   handTileCounts: gameStarted.snapshot.game?.handTileCounts,
   hostPrivateHandCount: gameStarted.snapshot.game?.selfHand?.length,
@@ -193,9 +197,10 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "match-mode-v7" ||
+  result.modelVersion !== "settlement-vote-v8" ||
   result.matchRounds !== 16 ||
   !result.earlyNextRoundRejected ||
+  !result.earlySettlementDuringRoundRejected ||
   result.wallRemaining !== 83 ||
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
   ![13, 14].includes(result.hostPrivateHandCount) ||
