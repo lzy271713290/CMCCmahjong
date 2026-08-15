@@ -102,6 +102,16 @@ function bindSession(socket: WebSocket, session: Session, connectionId: string, 
       roundNumber: session.snapshot.game.roundNumber,
     });
   }
+  if (event === "room_reconnected" && session.autoManagementReleased) {
+    logInfo("auto_management_ended", {
+      connectionId,
+      roomCode: session.roomCode,
+      playerId: shortId(session.playerId),
+      seat: session.snapshot.game?.viewerSeat,
+      reason: "player_reconnected",
+      revision: session.snapshot.revision,
+    });
+  }
 }
 
 function requireSession(socket: WebSocket): { roomCode: string; playerToken: string } {
@@ -276,6 +286,7 @@ webSockets.on("connection", (socket) => {
             approvedCount: diagnostics.approvedCount,
             waitingCount: diagnostics.waitingCount,
             autoApprovedCount: diagnostics.autoApprovedSeats.length,
+            duringRound: snapshot.match.earlySettlement?.duringRound,
             completedRounds: snapshot.match.completedRounds,
             revision: snapshot.revision,
           });
@@ -559,6 +570,53 @@ webSockets.on("connection", (socket) => {
     logError("websocket_error", { connectionId, message: error.message });
   });
 });
+
+const governanceTimer = setInterval(() => {
+  try {
+    for (const result of manager.processGovernance()) {
+      broadcast(result.roomCode);
+      for (const event of result.events) {
+        if (event.kind === "auto_management_started") {
+          logInfo("auto_management_started", {
+            roomCode: result.roomCode,
+            seat: event.seat,
+            offlineSeconds: Math.floor(event.offlineMs / 1_000),
+            revision: result.snapshot.revision,
+          });
+        } else if (event.kind === "turn_timed_out") {
+          logInfo("turn_timeout_resolved", {
+            roomCode: result.roomCode,
+            seat: event.seat,
+            tile: event.tile,
+            autoManaged: event.autoManaged,
+            deadlineAt: event.deadlineAt,
+            automaticTurnCount: event.automaticTurnCount,
+            nextTurnSeat: result.snapshot.game?.turnSeat,
+            stage: result.snapshot.game?.stage,
+            wallRemaining: result.snapshot.game?.wallRemaining,
+            revision: result.snapshot.revision,
+          });
+        } else {
+          logInfo("reaction_timeout_resolved", {
+            roomCode: result.roomCode,
+            timedOutSeats: event.seats.join(","),
+            autoManagedSeats: event.autoManagedSeats.join(","),
+            deadlineAt: event.deadlineAt,
+            nextTurnSeat: result.snapshot.game?.turnSeat,
+            stage: result.snapshot.game?.stage,
+            wallRemaining: result.snapshot.game?.wallRemaining,
+            revision: result.snapshot.revision,
+          });
+        }
+      }
+      logPublicTimelineCheckpointIfRoundEnded(result.snapshot, "governance", result.roomCode);
+      logMatchEndedIfNeeded(result.snapshot, "governance", result.roomCode);
+    }
+  } catch (error) {
+    logError("governance_tick_failed", { message: error instanceof Error ? error.message : "unknown" });
+  }
+}, 500);
+governanceTimer.unref();
 
 server.on("error", (error) => {
   const code = "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";

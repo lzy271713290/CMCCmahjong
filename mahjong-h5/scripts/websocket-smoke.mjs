@@ -2,7 +2,7 @@ import WebSocket from "ws";
 import { findDiscardReactionOptions } from "../dist/server/src/game-model.js";
 
 const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
-const expectedVersion = process.argv[3] ?? "replay-viewer-v12";
+const expectedVersion = process.argv[3] ?? "governance-ready-v13";
 const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
 
 function open() {
@@ -110,9 +110,20 @@ const gameStarted = gameStartedMessages[0];
 const earlyNextRoundWait = next(first, "error", (message) => message.code === "ROUND_ACTIVE");
 first.send(JSON.stringify({ type: "start_next_round" }));
 const earlyNextRoundError = await earlyNextRoundWait;
-const earlySettlementWait = next(first, "error", (message) => message.code === "ROUND_ACTIVE");
+const earlySettlementWaits = connections.map((connection) => next(
+  connection.socket,
+  "snapshot",
+  (message) => message.snapshot.match?.earlySettlement?.status === "voting" && message.snapshot.match.earlySettlement.duringRound === true,
+));
 first.send(JSON.stringify({ type: "request_early_settlement" }));
-const earlySettlementError = await earlySettlementWait;
+const earlySettlementMessages = await Promise.all(earlySettlementWaits);
+const settlementRejectedWaits = connections.map((connection) => next(
+  connection.socket,
+  "snapshot",
+  (message) => message.snapshot.match?.earlySettlement?.status === "rejected",
+));
+restoredSocket.send(JSON.stringify({ type: "respond_early_settlement", agree: false }));
+const settlementRejectedMessages = await Promise.all(settlementRejectedWaits);
 const dealerSeat = gameStarted.snapshot.game?.dealerSeat;
 const dealerIndex = connections.findIndex((connection) => gameStarted.snapshot.players.find((player) => player.id === connection.session.playerId)?.seat === dealerSeat);
 const dealerTile = chooseSafeDiscard(gameStartedMessages, dealerIndex);
@@ -172,7 +183,8 @@ const result = {
   modelVersion: gameStarted.snapshot.game?.modelVersion,
   matchRounds: gameStarted.snapshot.match?.totalRounds,
   earlyNextRoundRejected: earlyNextRoundError.code === "ROUND_ACTIVE",
-  earlySettlementDuringRoundRejected: earlySettlementError.code === "ROUND_ACTIVE",
+  earlySettlementDuringRoundAllowed: earlySettlementMessages.every((message) => message.snapshot.game?.actionDeadlineAt === undefined),
+  earlySettlementRejectedAndResumed: settlementRejectedMessages.every((message) => typeof message.snapshot.game?.actionDeadlineAt === "number"),
   wallRemaining: gameStarted.snapshot.game?.wallRemaining,
   handTileCounts: gameStarted.snapshot.game?.handTileCounts,
   hostPrivateHandCount: gameStarted.snapshot.game?.selfHand?.length,
@@ -209,7 +221,8 @@ if (
   result.modelVersion !== expectedVersion ||
   result.matchRounds !== 16 ||
   !result.earlyNextRoundRejected ||
-  !result.earlySettlementDuringRoundRejected ||
+  !result.earlySettlementDuringRoundAllowed ||
+  !result.earlySettlementRejectedAndResumed ||
   result.wallRemaining !== 83 ||
   result.handTileCounts?.reduce((sum, count) => sum + count, 0) !== 53 ||
   ![13, 14].includes(result.hostPrivateHandCount) ||

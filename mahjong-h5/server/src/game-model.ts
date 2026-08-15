@@ -11,7 +11,7 @@ import type {
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "replay-viewer-v12";
+export const GAME_MODEL_VERSION = "governance-ready-v13";
 
 export type Tile = {
   code: TileCode;

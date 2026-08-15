@@ -74,6 +74,11 @@ const historyList = required<HTMLOListElement>("history-list");
 const historyExportButton = required<HTMLButtonElement>("history-export");
 const historyCloseButton = required<HTMLButtonElement>("history-close");
 const historyCloseXButton = required<HTMLButtonElement>("history-close-x");
+const requestDissolveButton = required<HTMLButtonElement>("request-dissolve");
+const actionCountdown = required<HTMLElement>("action-countdown");
+const dissolveOverlay = required<HTMLElement>("dissolve-overlay");
+const dissolveDetail = required<HTMLElement>("dissolve-detail");
+const dissolveActions = required<HTMLElement>("dissolve-actions");
 
 let socket: WebSocket | undefined;
 let saved = loadSession();
@@ -93,6 +98,7 @@ let importedReplay: PublicReplayRecord | undefined;
 let historySource: HistorySource | undefined;
 let historyCursor = 0;
 let historyPlaybackTimer: number | undefined;
+let countdownTimer: number | undefined;
 
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -269,6 +275,8 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
   renderOperations(game.availableOperations ?? [], game.availableTurnOperations ?? []);
   renderScoreSummary(next);
+  renderDissolveVote(next, me);
+  updateActionCountdown();
   refreshLiveHistory(next);
 
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
@@ -282,6 +290,8 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
       const resultLabel = game.roundResult.reason === "self_draw_hu" ? "自摸" : game.roundResult.reason === "rob_kong_hu" ? "抢杠胡" : "胡牌";
       const winnerGain = game.roundResult.winnerSeats.reduce((sum, seat) => sum + (game.scoreDeltas[seat] ?? 0), 0);
       turnStatus.textContent = `${winners} ${resultLabel} · +${winnerGain}分`;
+    } else if (game.roundResult?.reason === "dissolved") {
+      turnStatus.textContent = "本局已解散 · 不计入完成局数";
     } else {
       turnStatus.textContent = "牌墙已空 · 本局流局";
     }
@@ -304,7 +314,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
   for (const player of next.players) {
     const position = positionForSeat(player.seat, viewerSeat);
     const playerSeat = document.createElement("div");
-    playerSeat.className = `player-seat seat-${position}${game.turnSeat === player.seat ? " active" : ""}${player.connected ? "" : " offline"}`;
+    playerSeat.className = `player-seat seat-${position}${game.turnSeat === player.seat ? " active" : ""}${player.connected ? "" : " offline"}${player.autoManaged ? " managed" : ""}`;
 
     const avatar = document.createElement("div");
     avatar.className = "avatar";
@@ -312,7 +322,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     const info = document.createElement("div");
     info.className = "player-info";
     const role = player.seat === game.dealerSeat ? "庄" : winds[(player.seat - game.dealerSeat + 4) % 4];
-    info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张 · ${next.scoreTotals[player.seat] ?? 200}分${player.isTestPlayer ? " · 托管" : ""}</span>`;
+    info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张 · ${next.scoreTotals[player.seat] ?? 200}分${player.isTestPlayer ? " · 测试" : player.autoManaged ? " · 托管" : ""}</span>`;
     info.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
     playerSeat.append(avatar, info);
 
@@ -424,6 +434,43 @@ function submitTurnOperation(operationId: string, label: string): void {
   }
 }
 
+function updateActionCountdown(): void {
+  const deadline = snapshot?.game?.actionDeadlineAt;
+  const paused = snapshot?.match.earlySettlement?.status === "voting" || snapshot?.match.status === "completed";
+  const remaining = !deadline || paused ? undefined : Math.max(0, Math.ceil((deadline - Date.now()) / 1_000));
+  actionCountdown.textContent = remaining === undefined ? "--" : String(remaining);
+  actionCountdown.parentElement?.classList.toggle("urgent", remaining !== undefined && remaining <= 5);
+}
+
+function renderDissolveVote(next: RoomSnapshot, me: PlayerView | undefined): void {
+  const vote = next.match.earlySettlement;
+  const visible = vote?.status === "voting" && Boolean(vote.duringRound);
+  dissolveOverlay.classList.toggle("hidden", !visible);
+  requestDissolveButton.classList.toggle("hidden", next.match.status === "completed");
+  requestDissolveButton.disabled = vote?.status === "voting";
+  if (!visible || !vote) return;
+
+  const requester = next.players.find((player) => player.seat === vote.requesterSeat)?.name ?? `${vote.requesterSeat + 1}号位`;
+  dissolveDetail.textContent = `${requester}申请解散 · 已同意 ${vote.approvedSeats.length}/4 · 投票期间牌局暂停`;
+  dissolveActions.replaceChildren();
+  if (!me || !vote.waitingSeats.includes(me.seat)) return;
+  const agree = document.createElement("button");
+  agree.type = "button";
+  agree.textContent = "同意解散";
+  const reject = document.createElement("button");
+  reject.type = "button";
+  reject.className = "reject-settlement-button";
+  reject.textContent = "继续打牌";
+  const respond = (accepted: boolean) => {
+    agree.disabled = true;
+    reject.disabled = true;
+    send({ type: "respond_early_settlement", agree: accepted });
+  };
+  agree.addEventListener("click", () => respond(true));
+  reject.addEventListener("click", () => respond(false));
+  dissolveActions.append(agree, reject);
+}
+
 function renderScoreSummary(next: RoomSnapshot): void {
   const game = next.game;
   const result = game?.roundResult;
@@ -506,13 +553,13 @@ function renderScoreSummary(next: RoomSnapshot): void {
     voteStatus.className = `early-settlement status-${vote.status}`;
     const requester = next.players.find((player) => player.seat === vote.requesterSeat)?.name ?? `${vote.requesterSeat + 1}号位`;
     if (vote.status === "voting") {
-      voteStatus.textContent = `${requester}申请提前结算 · 已同意 ${vote.approvedSeats.length}/4`;
+      voteStatus.textContent = `${requester}申请解散牌局 · 已同意 ${vote.approvedSeats.length}/4`;
       if (me && vote.waitingSeats.includes(me.seat)) {
         const actions = document.createElement("div");
         actions.className = "settlement-actions";
         const agree = document.createElement("button");
         agree.type = "button";
-        agree.textContent = "同意结算";
+        agree.textContent = "同意解散";
         const reject = document.createElement("button");
         reject.type = "button";
         reject.className = "reject-settlement-button";
@@ -531,9 +578,9 @@ function renderScoreSummary(next: RoomSnapshot): void {
         voteStatus.append(actions);
       }
     } else if (vote.status === "rejected") {
-      voteStatus.textContent = "提前结算未通过，本场可以继续";
+      voteStatus.textContent = "解散投票未通过，本场继续";
     } else {
-      voteStatus.textContent = "全员同意提前结算";
+      voteStatus.textContent = "全员同意解散牌局";
     }
     scoreSummary.append(voteStatus);
   }
@@ -545,7 +592,7 @@ function renderScoreSummary(next: RoomSnapshot): void {
     const requestSettlement = document.createElement("button");
     requestSettlement.type = "button";
     requestSettlement.className = "request-settlement-button";
-    requestSettlement.textContent = "申请提前结算";
+    requestSettlement.textContent = "申请解散牌局";
     requestSettlement.addEventListener("click", () => {
       requestSettlement.disabled = true;
       send({ type: "request_early_settlement" });
@@ -714,6 +761,8 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
       const winners = after.roundResult.winnerSeats.map((seat) => playerName(next, seat)).join("、");
       const label = after.roundResult.reason === "self_draw_hu" ? "自摸" : after.roundResult.reason === "rob_kong_hu" ? "抢杠胡" : "胡牌";
       enqueueFeedback({ text: `${winners} ${label}`, kind: "hu" });
+    } else if (after.roundResult.reason === "dissolved") {
+      enqueueFeedback({ text: "全员同意，当前未完成局已解散", kind: "round" });
     } else {
       enqueueFeedback({ text: "牌墙已空，本局流局", kind: "round" });
     }
@@ -1002,6 +1051,11 @@ function describePublicAction(action: PublicActionView, source: HistorySource): 
     case "settlement_requested": return `${seatName(action.seat)}申请提前结算`;
     case "settlement_agreed": return `${seatName(action.seat)}同意提前结算`;
     case "settlement_rejected": return `${seatName(action.seat)}拒绝提前结算`;
+    case "round_dissolved": return "全员同意，当前未完成局解散";
+    case "turn_timed_out": return `${seatName(action.seat)}超时或托管自动打出${tile}`;
+    case "reaction_timed_out": return `${winners || "玩家"}响应超时，自动过牌`;
+    case "auto_management_started": return `${seatName(action.seat)}离线90秒，进入托管`;
+    case "auto_management_ended": return `${seatName(action.seat)}重连，收回控制权`;
     case "player_disconnected": return `${seatName(action.seat)}暂时离线`;
     case "player_reconnected": return `${seatName(action.seat)}已重连`;
   }
@@ -1174,6 +1228,10 @@ soundToggleButton.addEventListener("click", () => {
 });
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
 reconnectNowButton.addEventListener("click", forceReconnect);
+requestDissolveButton.addEventListener("click", () => {
+  requestDissolveButton.disabled = true;
+  send({ type: "request_early_settlement" });
+});
 rulesOpenButton.addEventListener("click", () => setRulesVisible(true));
 rulesGameButton.addEventListener("click", () => setRulesVisible(true));
 rulesCloseButton.addEventListener("click", () => setRulesVisible(false));
@@ -1229,4 +1287,5 @@ soundToggleButton.setAttribute("aria-label", soundEnabled ? "关闭音效" : "�
 const invitedRoom = new URLSearchParams(location.search).get("room");
 if (invitedRoom && /^\d{6}$/.test(invitedRoom)) codeInput.value = invitedRoom;
 
+countdownTimer = window.setInterval(updateActionCountdown, 250);
 connect();

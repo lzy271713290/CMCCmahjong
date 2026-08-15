@@ -44,7 +44,7 @@ export type WinnerScoreView = {
 };
 export type MatchMode = 8 | 16;
 export type MatchRankingView = { seat: number; score: number; rank: number };
-export type RoundEndReason = "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted";
+export type RoundEndReason = "discard_hu" | "self_draw_hu" | "rob_kong_hu" | "wall_exhausted" | "dissolved";
 export type RoundHistoryView = {
   roundNumber: number;
   dealerSeat: number;
@@ -55,6 +55,7 @@ export type RoundHistoryView = {
 };
 export type EarlySettlementView = {
   requesterSeat: number;
+  duringRound?: boolean;
   status: "voting" | "rejected" | "approved";
   approvedSeats: number[];
   rejectedSeats: number[];
@@ -77,6 +78,11 @@ export type PublicActionKind =
   | "settlement_requested"
   | "settlement_agreed"
   | "settlement_rejected"
+  | "round_dissolved"
+  | "turn_timed_out"
+  | "reaction_timed_out"
+  | "auto_management_started"
+  | "auto_management_ended"
   | "player_disconnected"
   | "player_reconnected";
 export type PublicActionView = {
@@ -115,6 +121,7 @@ export type PlayerView = {
   connected: boolean;
   isHost: boolean;
   isTestPlayer: boolean;
+  autoManaged?: boolean;
 };
 
 export type RoomSnapshot = {
@@ -133,6 +140,8 @@ export type RoomSnapshot = {
     stage: "awaiting_discard" | "awaiting_reactions" | "round_ended";
     wallRemaining: number;
     handTileCounts: number[];
+    actionDeadlineAt?: number;
+    actionTimeoutSeconds?: number;
     viewerSeat?: number;
     selfHand?: TileCode[];
     selfDrawnTile?: TileCode;

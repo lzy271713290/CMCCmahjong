@@ -22,6 +22,7 @@ const actionKinds = new Set<PublicActionKind>([
   "round_started", "discard", "chi", "peng", "ming_gang", "an_gang", "jia_gang",
   "special_gang", "zhangmao", "self_draw_hu", "discard_hu", "rob_kong_hu",
   "round_ended", "settlement_requested", "settlement_agreed", "settlement_rejected",
+  "round_dissolved", "turn_timed_out", "reaction_timed_out", "auto_management_started", "auto_management_ended",
   "player_disconnected", "player_reconnected",
 ]);
 const honorTiles = new Set(["east", "south", "west", "north", "red", "green", "white"]);

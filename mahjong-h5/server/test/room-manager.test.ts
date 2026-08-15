@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { RoomSnapshot } from "../../shared/protocol.js";
 import { GAME_MODEL_VERSION, createFullTileSet, createInitialGame, validateInitialGame, type InitialGameState, type Tile } from "../src/game-model.js";
-import { RoomError, RoomManager, type Session } from "../src/room-manager.js";
+import { AUTO_MANAGEMENT_AFTER_MS, DISCARD_TIMEOUT_MS, REACTION_TIMEOUT_MS, RoomError, RoomManager, type Session } from "../src/room-manager.js";
 
 function passAllReactions(rooms: RoomManager, sessions: Session[], initial: RoomSnapshot): RoomSnapshot {
   let snapshot = initial;
@@ -224,6 +224,81 @@ function createDeterministicFourPlayerGame(): { rooms: RoomManager; sessions: Se
   const started = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
   return { rooms, sessions, started };
 }
+
+function createTimedFourPlayerGame(): { rooms: RoomManager; sessions: Session[]; started: RoomSnapshot; setNow: (value: number) => void } {
+  let now = 1_000_000;
+  const rooms = new RoomManager(() => 0, createInitialGame, () => now);
+  const sessions = [rooms.createRoom("东")];
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "南"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "西"));
+  sessions.push(rooms.joinRoom(sessions[0]!.roomCode, "北"));
+  for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
+  const started = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
+  return { rooms, sessions, started, setNow: (value) => { now = value; } };
+}
+
+test("出牌30秒超时优先自动打出刚摸牌并刷新服务端期限", () => {
+  const { rooms, started, setNow } = createTimedFourPlayerGame();
+  assert.equal(started.game?.actionDeadlineAt, 1_000_000 + DISCARD_TIMEOUT_MS);
+  assert.equal(started.game?.actionTimeoutSeconds, 30);
+  setNow(1_000_000 + DISCARD_TIMEOUT_MS - 1);
+  assert.deepEqual(rooms.processGovernance(), []);
+
+  setNow(1_000_000 + DISCARD_TIMEOUT_MS);
+  const [tick] = rooms.processGovernance();
+  const event = tick?.events.find((candidate) => candidate.kind === "turn_timed_out");
+  assert.equal(event?.kind, "turn_timed_out");
+  assert.equal(event?.seat, 0);
+  assert.equal(tick?.snapshot.game?.handTileCounts[0], 13);
+  assert.equal(tick?.snapshot.publicActions.some((action) => action.kind === "turn_timed_out"), true);
+  assert.equal(tick?.snapshot.publicActions.some((action) => action.kind === "discard"), true);
+  assert.equal((tick?.snapshot.game?.actionDeadlineAt ?? 0) > 1_000_000 + DISCARD_TIMEOUT_MS, true);
+});
+
+test("响应12秒超时将所有未响应真人自动过牌", () => {
+  const { rooms, sessions, started, setNow } = createTimedFourPlayerGame();
+  const discarded = rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "wan-1").snapshot;
+  assert.equal(discarded.game?.stage, "awaiting_reactions");
+  assert.equal(discarded.game?.actionTimeoutSeconds, 12);
+  assert.equal(discarded.game?.actionDeadlineAt, 1_000_000 + REACTION_TIMEOUT_MS);
+
+  setNow(1_000_000 + REACTION_TIMEOUT_MS);
+  const [tick] = rooms.processGovernance();
+  const event = tick?.events.find((candidate) => candidate.kind === "reaction_timed_out");
+  assert.equal(event?.kind, "reaction_timed_out");
+  assert.deepEqual(event?.seats, [1]);
+  assert.equal(tick?.snapshot.game?.stage, "awaiting_discard");
+  assert.equal(tick?.snapshot.game?.turnSeat, 1);
+  assert.equal(tick?.snapshot.publicActions.some((action) => action.kind === "reaction_timed_out"), true);
+});
+
+test("真人掉线90秒进入托管且重连立即收回控制权", () => {
+  const { rooms, sessions, started, setNow } = createTimedFourPlayerGame();
+  rooms.disconnect(started.roomCode, sessions[2]!.playerToken);
+  setNow(1_000_000 + AUTO_MANAGEMENT_AFTER_MS - 1);
+  rooms.processGovernance();
+  assert.equal(rooms.snapshot(started.roomCode).players[2]?.autoManaged, false);
+
+  setNow(1_000_000 + AUTO_MANAGEMENT_AFTER_MS);
+  const [tick] = rooms.processGovernance();
+  assert.deepEqual(tick?.events.map((event) => event.kind), ["auto_management_started"]);
+  assert.equal(tick?.snapshot.players[2]?.autoManaged, true);
+  const restored = rooms.reconnect(started.roomCode, sessions[2]!.playerToken);
+  assert.equal(restored.autoManagementReleased, true);
+  assert.equal(restored.snapshot.players[2]?.autoManaged, false);
+  assert.deepEqual(restored.snapshot.publicActions.slice(-2).map((action) => action.kind), ["auto_management_ended", "player_reconnected"]);
+});
+
+test("局中解散被拒后牌局恢复并重新获得完整出牌时间", () => {
+  const { rooms, sessions, started } = createTimedFourPlayerGame();
+  const requested = rooms.requestEarlySettlement(started.roomCode, sessions[0]!.playerToken).snapshot;
+  assert.equal(requested.match.earlySettlement?.duringRound, true);
+  assert.equal(requested.game?.actionDeadlineAt, undefined);
+  const rejected = rooms.respondEarlySettlement(started.roomCode, sessions[1]!.playerToken, false).snapshot;
+  assert.equal(rejected.match.earlySettlement?.status, "rejected");
+  assert.equal(rejected.game?.stage, "awaiting_discard");
+  assert.equal(rejected.game?.actionDeadlineAt, 1_000_000 + DISCARD_TIMEOUT_MS);
+});
 
 test("弃牌响应候选只下发给有资格的玩家且过牌后下家正常摸牌", () => {
   const { rooms, sessions, started } = createDeterministicFourPlayerGame();
@@ -596,10 +671,6 @@ function startEarlySettlementRoom(useTestPlayers = false): { rooms: RoomManager;
   }
   for (const session of sessions) rooms.setReady(session.roomCode, session.playerToken, true);
   const started = rooms.startGame(sessions[0]!.roomCode, sessions[0]!.playerToken);
-  assert.throws(
-    () => rooms.requestEarlySettlement(started.roomCode, sessions[0]!.playerToken),
-    (error) => error instanceof RoomError && error.code === "ROUND_ACTIVE",
-  );
   const ended = rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "wan-1").snapshot;
   return { rooms, sessions, ended };
 }
@@ -609,6 +680,7 @@ test("提前结算投票可以拒绝且拒绝后正常开始下一局", () => {
   const requested = rooms.requestEarlySettlement(ended.roomCode, sessions[1]!.playerToken).snapshot;
   assert.deepEqual(requested.match.earlySettlement, {
     requesterSeat: 1,
+    duringRound: false,
     status: "voting",
     approvedSeats: [1],
     rejectedSeats: [],
@@ -711,6 +783,34 @@ test("暗杠移除四张手牌、公开副露并从牌墙尾部补牌", () => {
   assert.deepEqual(ownerView.game?.melds[0]?.tiles, ["wan-1", "wan-1", "wan-1", "wan-1"]);
   assert.equal(ownerView.game?.melds[0]?.hiddenTileCount, undefined);
   assert.ok(ownerView.game?.selfDrawnTile);
+});
+
+test("局中解散必须四人一致且保留已结算杠分但不计未完成局", () => {
+  const { rooms, sessions, started } = startCustomGame(createConcealedGangGame);
+  const view = rooms.snapshotForPlayer(started.roomCode, sessions[0]!.playerToken);
+  const angang = view.game!.availableTurnOperations!.find((option) => option.kind === "angang")!;
+  const afterGang = rooms.performTurnOperation(started.roomCode, sessions[0]!.playerToken, angang.id).snapshot;
+  assert.deepEqual(afterGang.scoreTotals, [212, 196, 196, 196]);
+
+  const requested = rooms.requestEarlySettlement(started.roomCode, sessions[1]!.playerToken).snapshot;
+  assert.equal(requested.match.earlySettlement?.duringRound, true);
+  assert.equal(requested.game?.actionDeadlineAt, undefined);
+  assert.throws(
+    () => rooms.discardTile(started.roomCode, sessions[0]!.playerToken, requested.game!.selfHand?.[0] ?? "wan-1"),
+    (error) => error instanceof RoomError && error.code === "EARLY_SETTLEMENT_PENDING",
+  );
+  rooms.respondEarlySettlement(started.roomCode, sessions[0]!.playerToken, true);
+  rooms.respondEarlySettlement(started.roomCode, sessions[2]!.playerToken, true);
+  const approved = rooms.respondEarlySettlement(started.roomCode, sessions[3]!.playerToken, true).snapshot;
+
+  assert.equal(approved.match.status, "completed");
+  assert.equal(approved.match.endReason, "early_agreement");
+  assert.equal(approved.match.completedRounds, 0);
+  assert.deepEqual(approved.match.roundHistory, []);
+  assert.equal(approved.game?.roundResult?.reason, "dissolved");
+  assert.deepEqual(approved.game?.roundResult?.scoreDeltas, [12, -4, -4, -4]);
+  assert.deepEqual(approved.scoreTotals, [212, 196, 196, 196]);
+  assert.equal(approved.publicActions.at(-1)?.kind, "round_dissolved");
 });
 
 function createAddedGangGame(): InitialGameState {

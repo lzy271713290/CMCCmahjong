@@ -22,6 +22,8 @@ type Player = {
   ready: boolean;
   connected: boolean;
   isTestPlayer: boolean;
+  disconnectedAt?: number;
+  autoManaged: boolean;
 };
 
 type Room = {
@@ -39,9 +41,12 @@ type Room = {
   nextActionSequence: number;
   earlySettlement?: {
     requesterSeat: number;
+    duringRound: boolean;
     status: "voting" | "rejected" | "approved";
     responses: Map<number, boolean>;
   };
+  actionDeadlineAt?: number;
+  actionStateKey?: string;
   game?: InitialGameState;
 };
 
@@ -50,6 +55,22 @@ export type Session = {
   playerId: string;
   playerToken: string;
   snapshot: RoomSnapshot;
+  autoManagementReleased?: boolean;
+};
+
+export const DISCARD_TIMEOUT_MS = 30_000;
+export const REACTION_TIMEOUT_MS = 12_000;
+export const AUTO_MANAGEMENT_AFTER_MS = 90_000;
+
+export type GovernanceEvent =
+  | { kind: "auto_management_started"; seat: number; offlineMs: number }
+  | { kind: "turn_timed_out"; seat: number; tile: TileCode; autoManaged: boolean; deadlineAt?: number; automaticTurnCount: number }
+  | { kind: "reaction_timed_out"; seats: number[]; autoManagedSeats: number[]; deadlineAt?: number };
+
+export type GovernanceTickResult = {
+  roomCode: string;
+  snapshot: RoomSnapshot;
+  events: GovernanceEvent[];
 };
 
 export type TurnProgress = {
@@ -156,6 +177,7 @@ export class RoomManager {
   constructor(
     private readonly gameRandomIndex: (maxExclusive: number) => number = randomInt,
     private readonly gameFactory: typeof createInitialGame = createInitialGame,
+    private readonly now: () => number = Date.now,
   ) {}
 
   createRoom(rawName: string, totalRounds: MatchMode = 8): Session {
@@ -200,12 +222,19 @@ export class RoomManager {
     const room = this.getRoom(rawCode);
     const player = room.players.find((candidate) => candidate.token === playerToken);
     if (!player) throw new RoomError("TOKEN_INVALID", "原座位已失效，请重新加入");
+    let autoManagementReleased = false;
     if (!player.connected) {
       player.connected = true;
+      player.disconnectedAt = undefined;
+      if (player.autoManaged) {
+        player.autoManaged = false;
+        autoManagementReleased = true;
+        if (room.game) this.recordPublicAction(room, { kind: "auto_management_ended", seat: player.seat });
+      }
       if (room.game) this.recordPublicAction(room, { kind: "player_reconnected", seat: player.seat });
       room.revision += 1;
     }
-    return this.toSession(room, player);
+    return { ...this.toSession(room, player), autoManagementReleased };
   }
 
   disconnect(rawCode: string, playerToken: string): void {
@@ -213,6 +242,7 @@ export class RoomManager {
     const player = room?.players.find((candidate) => candidate.token === playerToken);
     if (room && player?.connected) {
       player.connected = false;
+      player.disconnectedAt = this.now();
       if (room.game) this.recordPublicAction(room, { kind: "player_disconnected", seat: player.seat });
       room.revision += 1;
     }
@@ -314,6 +344,7 @@ export class RoomManager {
     );
     room.phase = "playing";
     this.recordPublicAction(room, { kind: "round_started", roundNumber: room.game.roundNumber, seat: dealerSeat });
+    this.ensureActionDeadline(room, true);
     room.revision += 1;
     return this.snapshot(room.code);
   }
@@ -345,6 +376,7 @@ export class RoomManager {
     room.game = nextGame;
     room.earlySettlement = undefined;
     this.recordPublicAction(room, { kind: "round_started", roundNumber: nextRoundNumber, seat: nextDealerSeat });
+    this.ensureActionDeadline(room, true);
     room.revision += 1;
     return this.snapshot(room.code);
   }
@@ -355,15 +387,16 @@ export class RoomManager {
     if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
     if (room.phase !== "playing" || !room.game) throw new RoomError("GAME_NOT_STARTED", "牌局尚未开始");
     if (room.matchEndReason) throw new RoomError("MATCH_ENDED", "整场游戏已经结束");
-    if (room.game.stage !== "round_ended") throw new RoomError("ROUND_ACTIVE", "请在本局结算后发起提前结算");
     if (room.earlySettlement?.status === "voting") throw new RoomError("EARLY_SETTLEMENT_PENDING", "已经有一项提前结算投票");
 
+    const duringRound = room.game.stage !== "round_ended";
     const autoApprovedSeats = room.players.filter((candidate) => candidate.isTestPlayer).map((candidate) => candidate.seat);
     const responses = new Map<number, boolean>([[player.seat, true], ...autoApprovedSeats.map((seat) => [seat, true] as const)]);
     const status = responses.size === room.players.length ? "approved" : "voting";
-    room.earlySettlement = { requesterSeat: player.seat, status, responses };
+    room.earlySettlement = { requesterSeat: player.seat, duringRound, status, responses };
     this.recordPublicAction(room, { kind: "settlement_requested", seat: player.seat });
-    if (status === "approved") room.matchEndReason = "early_agreement";
+    this.clearActionDeadline(room);
+    if (status === "approved") this.finalizeEarlySettlement(room);
     room.revision += 1;
     return {
       snapshot: this.snapshot(room.code),
@@ -391,8 +424,9 @@ export class RoomManager {
     if (!agree) vote.status = "rejected";
     else if (vote.responses.size === room.players.length) {
       vote.status = "approved";
-      room.matchEndReason = "early_agreement";
+      this.finalizeEarlySettlement(room);
     }
+    if (vote.status === "rejected") this.ensureActionDeadline(room, true);
     room.revision += 1;
     return {
       snapshot: this.snapshot(room.code),
@@ -413,6 +447,7 @@ export class RoomManager {
     const player = room.players.find((candidate) => candidate.token === playerToken);
     if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
     if (room.phase !== "playing" || !room.game) throw new RoomError("GAME_REQUIRED", "牌局尚未开始");
+    if (room.earlySettlement?.status === "voting") throw new RoomError("EARLY_SETTLEMENT_PENDING", "解散投票进行中，牌局已暂停");
     if (room.game.stage === "round_ended") throw new RoomError("ROUND_ENDED", "本局已经结束");
     if (room.game.stage !== "awaiting_discard") throw new RoomError("REACTIONS_PENDING", "请等待其他玩家响应当前弃牌");
     if (room.game.turnSeat !== player.seat) throw new RoomError("TURN_REQUIRED", "还没有轮到你出牌");
@@ -433,6 +468,7 @@ export class RoomManager {
       this.recordPublicAction(room, { kind: "discard", seat: automatic.seat, tile: automatic.tile });
     }
     this.recordRoundEndedAction(room);
+    this.ensureActionDeadline(room, true);
     room.revision += 1;
     const nextTurnSeat = room.game.lastDraw ? room.game.turnSeat : undefined;
     return {
@@ -455,6 +491,7 @@ export class RoomManager {
     if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
     const game = room.game;
     if (room.phase !== "playing" || !game) throw new RoomError("GAME_REQUIRED", "牌局尚未开始");
+    if (room.earlySettlement?.status === "voting") throw new RoomError("EARLY_SETTLEMENT_PENDING", "解散投票进行中，牌局已暂停");
     if (game.stage === "round_ended") throw new RoomError("ROUND_ENDED", "本局已经结束");
     if (game.stage !== "awaiting_discard" || game.turnSeat !== player.seat) {
       throw new RoomError("TURN_OPERATION_NOT_AVAILABLE", "当前不能执行这个回合操作");
@@ -571,6 +608,7 @@ export class RoomManager {
       });
     }
     this.recordRoundEndedAction(room);
+    this.ensureActionDeadline(room, true);
     room.revision += 1;
     return {
       snapshot: this.snapshot(room.code),
@@ -593,6 +631,7 @@ export class RoomManager {
     if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
     const game = room.game;
     const pending = game?.pendingReaction;
+    if (room.earlySettlement?.status === "voting") throw new RoomError("EARLY_SETTLEMENT_PENDING", "解散投票进行中，牌局已暂停");
     if (room.phase !== "playing" || !game || game.stage !== "awaiting_reactions" || !pending) {
       throw new RoomError("REACTION_NOT_AVAILABLE", "当前没有等待你响应的弃牌");
     }
@@ -694,6 +733,7 @@ export class RoomManager {
       this.recordPublicAction(room, { kind: "discard", seat: automatic.seat, tile: automatic.tile });
     }
     this.recordRoundEndedAction(room);
+    this.ensureActionDeadline(room, resolution !== "waiting");
     room.revision += 1;
     const nextTurnSeat = game.pendingReaction || game.roundResult ? undefined : game.turnSeat;
     return {
@@ -712,6 +752,73 @@ export class RoomManager {
         stage: game.stage,
       },
     };
+  }
+
+  processGovernance(now = this.now()): GovernanceTickResult[] {
+    const results: GovernanceTickResult[] = [];
+    for (const room of this.rooms.values()) {
+      const events: GovernanceEvent[] = [];
+      for (const player of room.players) {
+        if (player.isTestPlayer || player.connected || player.autoManaged || player.disconnectedAt === undefined) continue;
+        const offlineMs = now - player.disconnectedAt;
+        if (offlineMs < AUTO_MANAGEMENT_AFTER_MS) continue;
+        player.autoManaged = true;
+        this.recordPublicAction(room, { kind: "auto_management_started", seat: player.seat });
+        room.revision += 1;
+        events.push({ kind: "auto_management_started", seat: player.seat, offlineMs });
+      }
+
+      const game = room.game;
+      if (!game || room.matchEndReason || room.earlySettlement?.status === "voting" || game.stage === "round_ended") {
+        if (events.length > 0) results.push({ roomCode: room.code, snapshot: this.snapshot(room.code), events });
+        continue;
+      }
+
+      const deadlineAt = room.actionDeadlineAt;
+      const expired = deadlineAt !== undefined && deadlineAt <= now;
+      if (game.stage === "awaiting_discard") {
+        const player = room.players.find((candidate) => candidate.seat === game.turnSeat);
+        if (player && (player.autoManaged || expired)) {
+          const hand = game.hands.get(player.seat) ?? [];
+          const tile = game.lastDraw?.seat === player.seat
+            ? game.lastDraw.tile.code
+            : sortTiles(hand).at(-1)?.code;
+          if (!tile) throw new Error("自动出牌时当前玩家没有手牌");
+          this.recordPublicAction(room, { kind: "turn_timed_out", seat: player.seat, tile });
+          const progress = this.discardTile(room.code, player.token, tile);
+          events.push({
+            kind: "turn_timed_out",
+            seat: player.seat,
+            tile,
+            autoManaged: player.autoManaged,
+            deadlineAt,
+            automaticTurnCount: progress.diagnostics.autoDiscards.length,
+          });
+        }
+      } else if (game.stage === "awaiting_reactions" && game.pendingReaction) {
+        const waitingSeats = [...game.pendingReaction.optionsBySeat.keys()].filter(
+          (seat) => !game.pendingReaction?.responses.has(seat),
+        );
+        const autoManagedSeats = waitingSeats.filter(
+          (seat) => room.players.find((candidate) => candidate.seat === seat)?.autoManaged,
+        );
+        const timedOutSeats = expired ? waitingSeats : autoManagedSeats;
+        if (timedOutSeats.length > 0) {
+          this.recordPublicAction(room, { kind: "reaction_timed_out", seats: timedOutSeats });
+          for (const seat of timedOutSeats) {
+            const currentPending = room.game?.pendingReaction;
+            if (!currentPending?.optionsBySeat.has(seat) || currentPending.responses.has(seat)) continue;
+            const player = room.players.find((candidate) => candidate.seat === seat);
+            if (!player) throw new Error("自动过牌玩家不存在");
+            this.reactToDiscard(room.code, player.token, "pass");
+          }
+          events.push({ kind: "reaction_timed_out", seats: timedOutSeats, autoManagedSeats, deadlineAt });
+        }
+      }
+
+      if (events.length > 0) results.push({ roomCode: room.code, snapshot: this.snapshot(room.code), events });
+    }
+    return results;
   }
 
   snapshot(rawCode: string): RoomSnapshot {
@@ -741,6 +848,7 @@ export class RoomManager {
           connected: player.connected,
           isHost: player.id === room.hostPlayerId,
           isTestPlayer: player.isTestPlayer,
+          autoManaged: player.autoManaged,
       })),
       scoreTotals: [...room.scoreTotals],
       publicActions: room.publicActions.map((action) => ({
@@ -762,6 +870,7 @@ export class RoomManager {
         earlySettlement: room.earlySettlement
           ? {
               requesterSeat: room.earlySettlement.requesterSeat,
+              duringRound: room.earlySettlement.duringRound,
               status: room.earlySettlement.status,
               approvedSeats: [...room.earlySettlement.responses.entries()].filter(([, agree]) => agree).map(([seat]) => seat),
               rejectedSeats: [...room.earlySettlement.responses.entries()].filter(([, agree]) => !agree).map(([seat]) => seat),
@@ -780,6 +889,8 @@ export class RoomManager {
             stage: room.game.stage,
             wallRemaining: room.game.wall.length,
             handTileCounts: [0, 1, 2, 3].map((seat) => room.game?.hands.get(seat)?.length ?? 0),
+            actionDeadlineAt: room.actionDeadlineAt,
+            actionTimeoutSeconds: room.game.stage === "awaiting_reactions" ? REACTION_TIMEOUT_MS / 1_000 : room.game.stage === "awaiting_discard" ? DISCARD_TIMEOUT_MS / 1_000 : undefined,
             viewerSeat: viewer?.seat,
             selfHand: viewer ? sortTiles(room.game.hands.get(viewer.seat) ?? []).map((tile) => tile.code) : undefined,
             selfDrawnTile: viewer && room.game.lastDraw?.seat === viewer.seat ? room.game.lastDraw.tile.code : undefined,
@@ -993,6 +1104,43 @@ export class RoomManager {
     return taken;
   }
 
+  private finalizeEarlySettlement(room: Room): void {
+    const game = room.game;
+    if (!game) throw new Error("提前结算时牌局状态不存在");
+    room.matchEndReason = "early_agreement";
+    this.clearActionDeadline(room);
+    if (game.stage === "round_ended") return;
+    game.pendingReaction = undefined;
+    game.lastDraw = undefined;
+    game.stage = "round_ended";
+    game.roundResult = {
+      reason: "dissolved",
+      winnerSeats: [],
+      payments: [...game.scorePayments],
+      scoreDeltas: [...game.scoreDeltas],
+    };
+    this.recordPublicAction(room, { kind: "round_dissolved" });
+  }
+
+  private ensureActionDeadline(room: Room, force = false): void {
+    const game = room.game;
+    if (!game || room.matchEndReason || room.earlySettlement?.status === "voting" || game.stage === "round_ended") {
+      this.clearActionDeadline(room);
+      return;
+    }
+    const stateKey = game.stage === "awaiting_discard"
+      ? `discard:${game.roundNumber}:${game.turnSeat}:${game.discards.length}`
+      : `reaction:${game.roundNumber}:${game.pendingReaction?.source}:${game.pendingReaction?.discard.seat}:${game.pendingReaction?.discard.tile}:${game.discards.length}`;
+    if (!force && room.actionStateKey === stateKey && room.actionDeadlineAt !== undefined) return;
+    room.actionStateKey = stateKey;
+    room.actionDeadlineAt = this.now() + (game.stage === "awaiting_reactions" ? REACTION_TIMEOUT_MS : DISCARD_TIMEOUT_MS);
+  }
+
+  private clearActionDeadline(room: Room): void {
+    room.actionDeadlineAt = undefined;
+    room.actionStateKey = undefined;
+  }
+
   private recordKongPayments(
     room: Room,
     seat: number,
@@ -1099,6 +1247,7 @@ export class RoomManager {
       ready: false,
       connected: true,
       isTestPlayer,
+      autoManaged: false,
     };
   }
 

@@ -103,6 +103,7 @@ body.in-game .shell { display: none; }
 
 .player-seat { position: absolute; z-index: 18; display: flex; align-items: center; gap: 8px; color: white; filter: drop-shadow(0 3px 5px rgba(0,0,0,.55)); }
 .player-seat.offline { opacity: .55; }
+.player-seat.managed .avatar { border-color: #f0a86e; box-shadow: 0 0 0 3px rgba(70,36,18,.72), 0 0 18px rgba(240,168,110,.7); }
 .avatar { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; border: 2px solid #d9bd66; border-radius: 10px; background: linear-gradient(145deg, #f2d491, #96631e); color: #39220d; box-shadow: 0 0 0 3px rgba(0,41,37,.7); font-size: 22px; font-weight: 900; }
 .player-info { display: grid; min-width: 88px; gap: 2px; padding: 5px 9px; border-radius: 7px; background: rgba(0,32,29,.72); }
 .player-info strong { max-width: 110px; overflow: hidden; text-overflow: ellipsis; font-size: 13px; white-space: nowrap; }
@@ -152,6 +153,9 @@ body.in-game .shell { display: none; }
 .wall-count { position: absolute; inset: 36px; display: grid; place-content: center; text-align: center; }
 .wall-count strong { color: #e5f8f1; font-family: ui-monospace, Consolas, monospace; font-size: 36px; line-height: 1; text-shadow: 0 0 12px #73d7bc; }
 .wall-count span { margin-top: 2px; color: #83aea0; font-size: 9px; letter-spacing: .2em; }
+.action-countdown { position: absolute; right: 15px; bottom: 26px; display: flex; align-items: baseline; gap: 1px; color: #9fc8ba; font-size: 7px; }
+.action-countdown strong { color: #f6dc86; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+.action-countdown.urgent strong { color: #ff9881; animation: active-player .65s ease-in-out infinite; }
 .turn-status { position: absolute; top: calc(100% + 8px); left: 50%; width: 220px; transform: translateX(-50%); color: #f4de8b; text-align: center; text-shadow: 0 2px 5px #001b18; font-size: 12px; }
 
 .operation-panel { position: absolute; z-index: 32; right: 0; bottom: 17%; left: 0; display: flex; align-items: center; justify-content: center; gap: 10px; }
@@ -205,6 +209,10 @@ body.in-game .shell { display: none; }
 .network-overlay strong { color: #ffe493; font-size: 18px; }
 .network-overlay span { color: #b7d1c8; font-size: 11px; }
 .network-overlay button { width: auto; margin: 2px auto 0; padding: 7px 18px; }
+.dissolve-overlay { position: absolute; z-index: 68; inset: 0; display: grid; place-items: center; background: rgba(0,20,19,.68); backdrop-filter: blur(4px); }
+.dissolve-overlay > div { display: grid; width: min(350px,72%); gap: 10px; padding: 20px; border: 1px solid rgba(255,192,128,.68); border-radius: 14px; background: rgba(45,25,19,.97); box-shadow: 0 15px 42px rgba(0,0,0,.55); text-align: center; }
+.dissolve-overlay strong { color: #ffd297; font-size: 19px; }
+.dissolve-overlay span { color: #e2cbbb; font-size: 11px; }
 
 .self-area { position: absolute; z-index: 25; right: 3.5%; bottom: max(1.8%, env(safe-area-inset-bottom)); left: 15%; display: flex; justify-content: center; }
 .self-hand { display: flex; align-items: flex-end; justify-content: center; gap: 3px; min-height: 70px; filter: drop-shadow(0 8px 7px rgba(0,0,0,.42)); }
@@ -258,6 +266,8 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .wind-left { top: 44px; left: 2px; }
   .wall-count { inset: 29px; }
   .wall-count strong { font-size: 28px; }
+  .action-countdown { right: 10px; bottom: 19px; }
+  .action-countdown strong { font-size: 10px; }
   .turn-status { top: calc(100% + 4px); font-size: 10px; }
   .operation-panel { bottom: 17%; gap: 7px; }
   .operation-button { width: 42px; height: 42px; font-size: 18px; }
