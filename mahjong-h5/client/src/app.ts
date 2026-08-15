@@ -2,6 +2,8 @@ import type { PlayerView, ReactionOption, RoomSnapshot, ServerMessage, TileCode,
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
 type TablePosition = "bottom" | "right" | "top" | "left";
+type FeedbackKind = "discard" | "turn" | "meld" | "hu" | "round" | "vote" | "system";
+type Feedback = { text: string; kind: FeedbackKind };
 
 const positions: TablePosition[] = ["bottom", "right", "top", "left"];
 const winds = ["东", "南", "西", "北"];
@@ -34,11 +36,28 @@ const notice = required<HTMLElement>("notice");
 const gameNotice = required<HTMLElement>("game-notice");
 const connection = required<HTMLElement>("connection");
 const gameConnection = required<HTMLElement>("game-connection");
+const shareRoomButton = required<HTMLButtonElement>("share-room");
+const soundToggleButton = required<HTMLButtonElement>("sound-toggle");
+const fullscreenToggleButton = required<HTMLButtonElement>("fullscreen-toggle");
+const actionBanner = required<HTMLElement>("action-banner");
+const networkOverlay = required<HTMLElement>("network-overlay");
+const networkDetail = required<HTMLElement>("network-detail");
+const reconnectNowButton = required<HTMLButtonElement>("reconnect-now");
 
-let socket: WebSocket;
+let socket: WebSocket | undefined;
 let saved = loadSession();
 let snapshot: RoomSnapshot | undefined;
 let reconnectTimer: number | undefined;
+let heartbeatTimer: number | undefined;
+let connectionGeneration = 0;
+let reconnectAttempts = 0;
+let pendingRequest: { type: string; timeout: number } | undefined;
+let feedbackTimer: number | undefined;
+const feedbackQueue: Feedback[] = [];
+let soundEnabled = localStorage.getItem("mahjong-sound") !== "off";
+let audioContext: AudioContext | undefined;
+let lastServerMessageAt = Date.now();
+let reconnectFeedbackPending = false;
 
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -48,44 +67,103 @@ function required<T extends HTMLElement>(id: string): T {
 
 function connect(): void {
   window.clearTimeout(reconnectTimer);
+  window.clearInterval(heartbeatTimer);
+  const generation = ++connectionGeneration;
   const scheme = location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${scheme}://${location.host}/ws`);
-  setConnection("连接中", false);
-  socket.addEventListener("open", () => {
-    setConnection("已连接", true);
+  const nextSocket = new WebSocket(`${scheme}://${location.host}/ws`);
+  socket = nextSocket;
+  setConnection(reconnectAttempts > 0 ? "重连中" : "连接中", false);
+  updateNetworkOverlay(true);
+  nextSocket.addEventListener("open", () => {
+    if (generation !== connectionGeneration) return;
+    const wasReconnecting = reconnectAttempts > 0;
+    reconnectAttempts = 0;
+    lastServerMessageAt = Date.now();
+    reconnectFeedbackPending = wasReconnecting;
+    setConnection(saved ? "恢复中" : "已连接", true);
     if (saved) send({ type: "reconnect", roomCode: saved.roomCode, playerToken: saved.playerToken });
+    else updateNetworkOverlay(false);
+    heartbeatTimer = window.setInterval(() => {
+      if (Date.now() - lastServerMessageAt > 45_000) {
+        nextSocket.close(4000, "连接超时");
+        return;
+      }
+      send({ type: "ping" }, false);
+    }, 20_000);
   });
-  socket.addEventListener("message", (event) => handleMessage(JSON.parse(String(event.data)) as ServerMessage));
-  socket.addEventListener("close", () => {
+  nextSocket.addEventListener("message", (event) => {
+    if (generation !== connectionGeneration) return;
+    lastServerMessageAt = Date.now();
+    handleMessage(JSON.parse(String(event.data)) as ServerMessage);
+  });
+  nextSocket.addEventListener("close", () => {
+    if (generation !== connectionGeneration) return;
+    window.clearInterval(heartbeatTimer);
+    clearPendingRequest();
+    reconnectAttempts += 1;
+    const delay = Math.min(1_000 * 2 ** Math.min(reconnectAttempts - 1, 4), 15_000);
     setConnection("正在重连", false);
-    reconnectTimer = window.setTimeout(connect, 1500);
+    updateNetworkOverlay(true, delay);
+    reconnectTimer = window.setTimeout(connect, delay);
   });
-  socket.addEventListener("error", () => showNotice("网络连接不稳定，正在重试"));
+  nextSocket.addEventListener("error", () => {
+    if (generation === connectionGeneration) showNotice("网络连接不稳定，正在自动重试");
+  });
 }
 
-function send(message: object): void {
-  if (socket.readyState !== WebSocket.OPEN) {
+function send(message: object, trackRequest = true): boolean {
+  if (socket?.readyState !== WebSocket.OPEN) {
     showNotice("还没有连上服务器，请稍等");
-    return;
+    updateNetworkOverlay(true);
+    return false;
+  }
+  const type = (message as { type?: string }).type ?? "unknown";
+  if (trackRequest && pendingRequest) {
+    showNotice("上一个操作正在确认，请勿重复点击");
+    return false;
   }
   socket.send(JSON.stringify(message));
+  if (trackRequest && type !== "reconnect") {
+    const timeout = window.setTimeout(() => {
+      if (pendingRequest?.type !== type) return;
+      pendingRequest = undefined;
+      showNotice("操作确认较慢，请检查网络后重试");
+      renderPendingState();
+    }, 6_000);
+    pendingRequest = { type, timeout };
+    renderPendingState();
+  }
+  return true;
 }
 
 function handleMessage(message: ServerMessage): void {
   if (message.type === "session") {
+    clearPendingRequest();
     saved = { roomCode: message.roomCode, playerId: message.playerId, playerToken: message.playerToken };
     localStorage.setItem("mahjong-session", JSON.stringify(saved));
     render(message.snapshot);
-    showNotice("已进入房间");
+    setConnection("已连接", true);
+    updateNetworkOverlay(false);
+    if (reconnectFeedbackPending) enqueueFeedback({ text: "网络已恢复，牌局状态已同步", kind: "system" });
+    reconnectFeedbackPending = false;
+    showNotice(message.snapshot.phase === "playing" ? "牌局状态已恢复" : "已进入房间");
   } else if (message.type === "snapshot") {
+    const previous = snapshot;
+    clearPendingRequest();
     render(message.snapshot);
+    collectSnapshotFeedback(previous, message.snapshot);
   } else if (message.type === "error") {
+    clearPendingRequest();
     if (message.code === "ROOM_NOT_FOUND" || message.code === "TOKEN_INVALID") {
       localStorage.removeItem("mahjong-session");
       saved = undefined;
       showLobby();
     }
+    reconnectFeedbackPending = false;
+    updateNetworkOverlay(false);
     showNotice(message.message);
+  } else if (message.type === "pong") {
+    setConnection("已连接", true);
   }
 }
 
@@ -104,10 +182,12 @@ function render(next: RoomSnapshot): void {
 
   if (isPlaying && next.game) {
     renderTable(next, me);
+    renderPendingState();
     return;
   }
 
   renderWaitingRoom(next, me);
+  renderPendingState();
 }
 
 function renderWaitingRoom(next: RoomSnapshot, me: PlayerView | undefined): void {
@@ -281,15 +361,17 @@ function renderOperations(options: ReactionOption[], turnOptions: TurnOperationO
 }
 
 function submitReaction(operationId: string | "pass", label: string): void {
-  operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
-  send({ type: "react_to_discard", operationId });
-  showNotice(`已选择${label}，等待结算`);
+  if (send({ type: "react_to_discard", operationId })) {
+    operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
+    showNotice(`已选择${label}，等待结算`);
+  }
 }
 
 function submitTurnOperation(operationId: string, label: string): void {
-  operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
-  send({ type: "perform_turn_operation", operationId });
-  showNotice(`已选择${label}`);
+  if (send({ type: "perform_turn_operation", operationId })) {
+    operationPanel.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
+    showNotice(`已选择${label}`);
+  }
 }
 
 function renderScoreSummary(next: RoomSnapshot): void {
@@ -299,15 +381,44 @@ function renderScoreSummary(next: RoomSnapshot): void {
   scoreSummary.classList.toggle("hidden", !game || game.stage !== "round_ended" || !result);
   if (!game || game.stage !== "round_ended" || !result) return;
 
+  const header = document.createElement("header");
   const title = document.createElement("strong");
   title.textContent = next.match.status === "completed" ? "整场结算" : result.winnerSeats.length > 0 ? "本局结算" : "本局流局";
-  const deltas = document.createElement("span");
-  deltas.textContent = next.players
-    .map((player) => `${player.name} ${(game.scoreDeltas[player.seat] ?? 0) >= 0 ? "+" : ""}${game.scoreDeltas[player.seat] ?? 0}`)
-    .join(" · ");
-  scoreSummary.append(title, deltas);
+  const subtitle = document.createElement("span");
+  const endReasonLabels: Record<string, string> = {
+    round_limit: "已完成约定局数",
+    negative_score: "有玩家累计分低于0分",
+    early_agreement: "全员同意提前结算",
+  };
+  subtitle.textContent = next.match.status === "completed"
+    ? endReasonLabels[next.match.endReason ?? ""] ?? `共完成${next.match.completedRounds}局`
+    : `第${game.roundNumber}局 · 当前累计分`;
+  header.append(title, subtitle);
+  scoreSummary.append(header);
+
+  const scoreboard = document.createElement("div");
+  scoreboard.className = "settlement-scoreboard";
+  const orderedPlayers = [...next.players].sort((left, right) => {
+    const leftRank = next.match.rankings?.find((ranking) => ranking.seat === left.seat)?.rank ?? left.seat + 1;
+    const rightRank = next.match.rankings?.find((ranking) => ranking.seat === right.seat)?.rank ?? right.seat + 1;
+    return leftRank - rightRank || (next.scoreTotals[right.seat] ?? 0) - (next.scoreTotals[left.seat] ?? 0);
+  });
+  for (const player of orderedPlayers) {
+    const row = document.createElement("div");
+    const ranking = next.match.rankings?.find((candidate) => candidate.seat === player.seat);
+    const delta = game.scoreDeltas[player.seat] ?? 0;
+    row.className = `${player.id === saved?.playerId ? "is-me" : ""}${result.winnerSeats.includes(player.seat) ? " is-winner" : ""}`;
+    row.innerHTML = `<b>${ranking ? `第${ranking.rank}名` : winds[(player.seat - game.dealerSeat + 4) % 4]}</b><strong></strong><span class="round-delta ${delta > 0 ? "positive" : delta < 0 ? "negative" : ""}">${delta >= 0 ? "+" : ""}${delta}</span><em>${next.scoreTotals[player.seat] ?? 200}分</em>`;
+    row.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+    scoreboard.append(row);
+  }
+  scoreSummary.append(scoreboard);
 
   if (result.payments?.length) {
+    const paymentDetails = document.createElement("details");
+    paymentDetails.className = "payment-details";
+    const paymentSummary = document.createElement("summary");
+    paymentSummary.textContent = `查看支付明细（${result.payments.length}笔）`;
     const detail = document.createElement("small");
     detail.textContent = result.payments
       .map((payment) => {
@@ -316,15 +427,8 @@ function renderScoreSummary(next: RoomSnapshot): void {
         return `${from}→${to} ${payment.amount}分`;
       })
       .join(" · ");
-    scoreSummary.append(detail);
-  }
-
-  if (next.match.rankings?.length) {
-    const rankings = document.createElement("em");
-    rankings.textContent = next.match.rankings
-      .map((ranking) => `第${ranking.rank}名 ${next.players.find((player) => player.seat === ranking.seat)?.name ?? `${ranking.seat + 1}号位`} ${ranking.score}分`)
-      .join(" · ");
-    scoreSummary.append(rankings);
+    paymentDetails.append(paymentSummary, detail);
+    scoreSummary.append(paymentDetails);
   }
 
   const me = next.players.find((player) => player.id === saved?.playerId);
@@ -384,6 +488,9 @@ function renderScoreSummary(next: RoomSnapshot): void {
     scoreSummary.append(voteStatus);
   }
 
+  const footer = document.createElement("footer");
+  footer.className = "settlement-footer";
+
   if (next.match.status !== "completed" && vote?.status !== "voting") {
     const requestSettlement = document.createElement("button");
     requestSettlement.type = "button";
@@ -393,7 +500,7 @@ function renderScoreSummary(next: RoomSnapshot): void {
       requestSettlement.disabled = true;
       send({ type: "request_early_settlement" });
     });
-    scoreSummary.append(requestSettlement);
+    footer.append(requestSettlement);
   }
 
   if (me?.isHost && next.match.status !== "completed" && vote?.status !== "voting") {
@@ -405,8 +512,23 @@ function renderScoreSummary(next: RoomSnapshot): void {
       nextRound.disabled = true;
       send({ type: "start_next_round" });
     });
-    scoreSummary.append(nextRound);
+    footer.append(nextRound);
   }
+
+  if (next.match.status === "completed") {
+    const newRoom = document.createElement("button");
+    newRoom.type = "button";
+    newRoom.className = "next-round-button";
+    newRoom.textContent = "再开一桌";
+    newRoom.addEventListener("click", () => returnToLobby());
+    const shareResult = document.createElement("button");
+    shareResult.type = "button";
+    shareResult.className = "request-settlement-button";
+    shareResult.textContent = "分享结果";
+    shareResult.addEventListener("click", () => shareCurrentRoom(true));
+    footer.append(shareResult, newRoom);
+  }
+  if (footer.childElementCount > 0) scoreSummary.append(footer);
 }
 
 function renderWalls(remaining: number): void {
@@ -461,9 +583,11 @@ function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", inter
   if (tile instanceof HTMLButtonElement) {
     tile.type = "button";
     tile.addEventListener("click", () => {
-      selfHand.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
-      send({ type: "discard_tile", tile: code });
-      showNotice(`已打出 ${tileLabel(code)}`);
+      if (send({ type: "discard_tile", tile: code })) {
+        selfHand.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
+        tile.classList.add("discarding");
+        showNotice(`已打出 ${tileLabel(code)}`);
+      }
     });
   }
   tile.className = `tile-shell ${size}-tile`;
@@ -506,12 +630,230 @@ function tileLabel(code: TileCode): string {
   return `${ranks[Number(rawRank)] ?? rawRank}${suits[suit ?? ""] ?? ""}`;
 }
 
+function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomSnapshot): void {
+  const before = previous?.game;
+  const after = next.game;
+  if (!before || !after || previous?.roomCode !== next.roomCode) return;
+  if (after.roundNumber !== before.roundNumber) {
+    enqueueFeedback({ text: `第${after.roundNumber}局开始 · ${playerName(next, after.dealerSeat)}坐庄`, kind: "round" });
+    return;
+  }
+
+  if (after.discards.length > before.discards.length) {
+    for (const discard of after.discards.slice(before.discards.length).slice(-4)) {
+      enqueueFeedback({ text: `${playerName(next, discard.seat)} 打出 ${tileLabel(discard.tile)}`, kind: "discard" });
+    }
+    document.querySelector(".discard-tile.latest")?.classList.add("new-discard");
+  }
+
+  const oldMelds = new Map(before.melds.map((meld, index) => [`${meld.seat}:${index}`, JSON.stringify(meld)]));
+  after.melds.forEach((meld, index) => {
+    if (oldMelds.get(`${meld.seat}:${index}`) === JSON.stringify(meld)) return;
+    const label = meld.kind === "chi"
+      ? "吃"
+      : meld.kind === "peng"
+        ? "碰"
+        : meld.kind === "special_gang"
+          ? meld.growthCount ? "涨毛" : "特殊杠"
+          : "杠";
+    enqueueFeedback({ text: `${playerName(next, meld.seat)} ${label}`, kind: "meld" });
+  });
+
+  if (!before.roundResult && after.roundResult) {
+    if (after.roundResult.winnerSeats.length > 0) {
+      const winners = after.roundResult.winnerSeats.map((seat) => playerName(next, seat)).join("、");
+      const label = after.roundResult.reason === "self_draw_hu" ? "自摸" : after.roundResult.reason === "rob_kong_hu" ? "抢杠胡" : "胡牌";
+      enqueueFeedback({ text: `${winners} ${label}`, kind: "hu" });
+    } else {
+      enqueueFeedback({ text: "牌墙已空，本局流局", kind: "round" });
+    }
+  }
+
+  const previousVote = previous.match.earlySettlement;
+  const nextVote = next.match.earlySettlement;
+  if (nextVote && JSON.stringify(previousVote) !== JSON.stringify(nextVote)) {
+    const voteText = nextVote.status === "approved"
+      ? "全员同意，整场提前结算"
+      : nextVote.status === "rejected"
+        ? "提前结算未通过，继续牌局"
+        : `提前结算投票 ${nextVote.approvedSeats.length}/4`;
+    enqueueFeedback({ text: voteText, kind: "vote" });
+  }
+
+  const viewerSeat = after.viewerSeat;
+  if (viewerSeat !== undefined && before.turnSeat !== viewerSeat && after.turnSeat === viewerSeat && after.stage === "awaiting_discard") {
+    enqueueFeedback({ text: "轮到你出牌", kind: "turn" });
+    navigator.vibrate?.(80);
+  }
+}
+
+function playerName(roomSnapshot: RoomSnapshot, seat: number): string {
+  return roomSnapshot.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`;
+}
+
+function enqueueFeedback(feedback: Feedback): void {
+  if (feedbackQueue.length >= 8) feedbackQueue.shift();
+  feedbackQueue.push(feedback);
+  if (feedbackTimer === undefined) showNextFeedback();
+}
+
+function showNextFeedback(): void {
+  const feedback = feedbackQueue.shift();
+  if (!feedback) {
+    actionBanner.classList.add("hidden");
+    actionBanner.className = "action-banner hidden";
+    feedbackTimer = undefined;
+    return;
+  }
+  actionBanner.textContent = feedback.text;
+  actionBanner.className = `action-banner feedback-${feedback.kind}`;
+  playSound(feedback.kind);
+  if (feedback.kind === "hu") navigator.vibrate?.([100, 60, 160]);
+  feedbackTimer = window.setTimeout(showNextFeedback, feedback.kind === "hu" ? 1_600 : 900);
+}
+
+function ensureAudioContext(): AudioContext | undefined {
+  if (!soundEnabled) return undefined;
+  try {
+    audioContext ??= new AudioContext();
+    void audioContext.resume();
+    return audioContext;
+  } catch {
+    return undefined;
+  }
+}
+
+function playSound(kind: FeedbackKind): void {
+  const context = ensureAudioContext();
+  if (!context) return;
+  const tones: Record<FeedbackKind, number[]> = {
+    discard: [360],
+    turn: [520, 660],
+    meld: [410, 520],
+    hu: [523, 659, 784],
+    round: [330, 440],
+    vote: [440],
+    system: [600],
+  };
+  tones[kind].forEach((frequency, index) => {
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const start = context.currentTime + index * 0.09;
+    oscillator.type = kind === "hu" ? "triangle" : "sine";
+    oscillator.frequency.value = frequency;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(kind === "hu" ? 0.12 : 0.06, start + 0.015);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.14);
+    oscillator.connect(gain).connect(context.destination);
+    oscillator.start(start);
+    oscillator.stop(start + 0.16);
+  });
+}
+
+function clearPendingRequest(): void {
+  if (!pendingRequest) return;
+  window.clearTimeout(pendingRequest.timeout);
+  pendingRequest = undefined;
+  renderPendingState();
+}
+
+function renderPendingState(): void {
+  const busy = Boolean(pendingRequest);
+  document.body.classList.toggle("request-pending", busy);
+  document.querySelectorAll<HTMLButtonElement>("#lobby button, #room button, #self-hand button, #operation-panel button, #score-summary button")
+    .forEach((button) => { button.disabled = busy; });
+}
+
+function updateNetworkOverlay(visible: boolean, retryDelay = 0): void {
+  networkOverlay.classList.toggle("hidden", !visible || !document.body.classList.contains("in-game"));
+  networkDetail.textContent = retryDelay > 0
+    ? `${Math.ceil(retryDelay / 1_000)}秒后自动重试，牌局状态会保留`
+    : "牌局状态会自动恢复，请稍候";
+}
+
+function forceReconnect(): void {
+  window.clearTimeout(reconnectTimer);
+  window.clearInterval(heartbeatTimer);
+  const oldSocket = socket;
+  connectionGeneration += 1;
+  socket = undefined;
+  oldSocket?.close();
+  reconnectAttempts = Math.max(1, reconnectAttempts);
+  connect();
+}
+
+async function shareCurrentRoom(includeResult = false): Promise<void> {
+  const roomCode = snapshot?.roomCode ?? currentCode.textContent ?? "";
+  const inviteUrl = `${location.origin}/?room=${encodeURIComponent(roomCode)}`;
+  const rankingText = includeResult && snapshot?.match.rankings
+    ? `，战绩：${snapshot.match.rankings.map((ranking) => `${playerName(snapshot!, ranking.seat)}${ranking.score}分`).join("、")}`
+    : "";
+  const text = `好友麻将房间 ${roomCode}${rankingText}`;
+  try {
+    if (navigator.share) await navigator.share({ title: "好友麻将", text, url: inviteUrl });
+    else {
+      await copyText(`${text}\n${inviteUrl}`);
+      showNotice("邀请信息已复制，发给朋友即可加入");
+    }
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") return;
+    try {
+      await copyText(`${text}\n${inviteUrl}`);
+      showNotice("邀请信息已复制，发给朋友即可加入");
+    } catch {
+      showNotice("分享失败，请直接告诉朋友房间号");
+    }
+  }
+}
+
+async function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // 公网 HTTP 下部分手机不开放 Clipboard API，继续使用兼容方案。
+    }
+  }
+  const helper = document.createElement("textarea");
+  helper.value = text;
+  helper.style.position = "fixed";
+  helper.style.opacity = "0";
+  document.body.append(helper);
+  helper.select();
+  const copied = document.execCommand("copy");
+  helper.remove();
+  if (!copied) throw new Error("浏览器不支持复制");
+}
+
+function returnToLobby(): void {
+  localStorage.removeItem("mahjong-session");
+  saved = undefined;
+  snapshot = undefined;
+  history.replaceState({}, "", "/");
+  forceReconnect();
+  showLobby();
+  showNotice("已返回大厅，可以创建新房间");
+}
+
+async function toggleFullscreen(): Promise<void> {
+  try {
+    if (document.fullscreenElement) await document.exitFullscreen();
+    else await gameScreen.requestFullscreen();
+    const orientation = screen.orientation as ScreenOrientation & { lock?: (orientation: "landscape") => Promise<void> };
+    await orientation.lock?.("landscape");
+  } catch {
+    showNotice("当前浏览器不支持自动全屏，请手动横屏");
+  }
+}
+
 function showLobby(): void {
   snapshot = undefined;
   document.body.classList.remove("in-game");
   room.classList.add("hidden");
   gameScreen.classList.add("hidden");
   lobby.classList.remove("hidden");
+  networkOverlay.classList.add("hidden");
 }
 
 function loadSession(): SavedSession | undefined {
@@ -535,17 +877,54 @@ function showNotice(text: string): void {
   gameNotice.textContent = text;
 }
 
-createButton.addEventListener("click", () => send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16 }));
-joinButton.addEventListener("click", () => send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value }));
+createButton.addEventListener("click", () => {
+  if (!nameInput.value.trim()) return showNotice("请先输入昵称");
+  send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16 });
+});
+joinButton.addEventListener("click", () => {
+  if (!nameInput.value.trim()) return showNotice("请先输入昵称");
+  if (!/^\d{6}$/.test(codeInput.value.trim())) return showNotice("请输入六位房间号");
+  send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value });
+});
 readyButton.addEventListener("click", () => {
   const me = snapshot?.players.find((player) => player.id === saved?.playerId);
   send({ type: "set_ready", ready: !me?.ready });
 });
 fillTestButton.addEventListener("click", () => send({ type: "fill_test_players" }));
-startButton.addEventListener("click", () => send({ type: "start_game" }));
-copyButton.addEventListener("click", async () => {
-  await navigator.clipboard.writeText(currentCode.textContent ?? "");
-  showNotice("房间号已复制，发给朋友就能加入");
+startButton.addEventListener("click", () => {
+  ensureAudioContext();
+  send({ type: "start_game" });
 });
+copyButton.addEventListener("click", async () => {
+  const roomCode = currentCode.textContent ?? "";
+  try {
+    await copyText(`好友麻将房间 ${roomCode}\n${location.origin}/?room=${roomCode}`);
+    showNotice("房间号和邀请链接已复制");
+  } catch {
+    showNotice(`请把房间号 ${roomCode} 发给朋友`);
+  }
+});
+shareRoomButton.addEventListener("click", () => shareCurrentRoom());
+soundToggleButton.addEventListener("click", () => {
+  soundEnabled = !soundEnabled;
+  localStorage.setItem("mahjong-sound", soundEnabled ? "on" : "off");
+  soundToggleButton.textContent = soundEnabled ? "声" : "静";
+  soundToggleButton.setAttribute("aria-label", soundEnabled ? "关闭音效" : "开启音效");
+  if (soundEnabled) playSound("system");
+});
+fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
+reconnectNowButton.addEventListener("click", forceReconnect);
+window.addEventListener("online", () => {
+  if (socket?.readyState !== WebSocket.OPEN) forceReconnect();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible" && socket?.readyState !== WebSocket.OPEN) forceReconnect();
+});
+document.addEventListener("pointerdown", () => ensureAudioContext(), { once: true });
+
+soundToggleButton.textContent = soundEnabled ? "声" : "静";
+soundToggleButton.setAttribute("aria-label", soundEnabled ? "关闭音效" : "开启音效");
+const invitedRoom = new URLSearchParams(location.search).get("room");
+if (invitedRoom && /^\d{6}$/.test(invitedRoom)) codeInput.value = invitedRoom;
 
 connect();

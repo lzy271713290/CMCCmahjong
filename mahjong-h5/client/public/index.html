@@ -45,7 +45,12 @@
         <div class="table-hud">
           <div class="hud-room"><span>房间</span><strong id="game-room-code">------</strong><span id="game-match-progress">第1/8局</span></div>
           <div id="round-label" class="round-label">第1局</div>
-          <span id="game-connection" class="status">连接中</span>
+          <div class="hud-actions">
+            <button id="share-room" class="hud-button" type="button" aria-label="邀请好友" title="邀请好友">邀</button>
+            <button id="sound-toggle" class="hud-button" type="button" aria-label="关闭音效" title="音效">声</button>
+            <button id="fullscreen-toggle" class="hud-button" type="button" aria-label="全屏横屏" title="全屏横屏">全</button>
+            <span id="game-connection" class="status">连接中</span>
+          </div>
         </div>
 
         <div id="table-seats" class="table-seats"></div>
@@ -69,11 +74,15 @@
         </div>
 
         <div id="operation-panel" class="operation-panel hidden" aria-label="可选操作"></div>
+        <div id="action-banner" class="action-banner hidden" aria-live="assertive"></div>
         <div id="score-summary" class="score-summary hidden" aria-live="polite"></div>
         <div class="self-area">
           <div id="self-hand" class="self-hand" aria-label="我的手牌"></div>
         </div>
         <p id="game-notice" class="game-notice" aria-live="polite"></p>
+        <div id="network-overlay" class="network-overlay hidden" role="status">
+          <div><strong>正在重新连接</strong><span id="network-detail">牌局状态会自动恢复，请稍候</span><button id="reconnect-now" type="button">立即重试</button></div>
+        </div>
         <div class="rotate-tip">请横屏体验牌桌</div>
       </div>
     </section>

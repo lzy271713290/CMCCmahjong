@@ -7,6 +7,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.js";
 import { RoomError, RoomManager, type Session } from "./room-manager.js";
 import { instanceId, logError, logInfo, logWarn, shortId } from "./logger.js";
+import { GAME_MODEL_VERSION } from "./game-model.js";
 
 const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
 const manager = new RoomManager();
@@ -27,6 +28,11 @@ const mimeTypes: Record<string, string> = {
 
 const server = createServer((request, response) => {
   const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+  if (pathname === "/healthz") {
+    response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    response.end(JSON.stringify({ ok: true, modelVersion: GAME_MODEL_VERSION, instanceId, uptimeSeconds: Math.floor(process.uptime()) }));
+    return;
+  }
   let filePath: string | undefined;
   if (pathname === "/app.js") filePath = join(projectRoot, "dist/client/src/app.js");
   else if (pathname === "/styles.css") filePath = join(projectRoot, "client/public/styles.css");

@@ -155,6 +155,8 @@ const [tileAssetResponse, tableAssetResponse] = await Promise.all([
   fetch(`${httpBaseUrl}/assets/babykylin/table/mahjong_table.jpg`),
 ]);
 const [tileAsset, tableAsset] = await Promise.all([tileAssetResponse.arrayBuffer(), tableAssetResponse.arrayBuffer()]);
+const healthResponse = await fetch(`${httpBaseUrl}/healthz`);
+const health = await healthResponse.json();
 
 const result = {
   serverUrl,
@@ -183,6 +185,7 @@ const result = {
   playingHandRestored: JSON.stringify(playingRestored.snapshot.game?.selfHand) === JSON.stringify(originalPlayingHand),
   tileAsset: { contentType: tileAssetResponse.headers.get("content-type"), bytes: tileAsset.byteLength },
   tableAsset: { contentType: tableAssetResponse.headers.get("content-type"), bytes: tableAsset.byteLength },
+  health: { status: healthResponse.status, ok: health.ok, modelVersion: health.modelVersion, instanceIdLength: health.instanceId?.length },
 };
 console.log(JSON.stringify(result));
 first.close();
@@ -197,7 +200,7 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "settlement-vote-v8" ||
+  result.modelVersion !== "playable-ux-v9" ||
   result.matchRounds !== 16 ||
   !result.earlyNextRoundRejected ||
   !result.earlySettlementDuringRoundRejected ||
@@ -217,7 +220,11 @@ if (
   result.tileAsset.contentType !== "image/png" ||
   result.tileAsset.bytes < 100_000 ||
   result.tableAsset.contentType !== "image/jpeg" ||
-  result.tableAsset.bytes < 100_000
+  result.tableAsset.bytes < 100_000 ||
+  result.health.status !== 200 ||
+  !result.health.ok ||
+  result.health.modelVersion !== "playable-ux-v9" ||
+  result.health.instanceIdLength !== 8
 ) {
   process.exitCode = 1;
 }
