@@ -5,9 +5,10 @@ export type EffectSound = "deal" | "discard" | "select" | "shuffle" | "timeup" |
 export type AudioChannel = "voice" | "effects" | "music";
 export type AudioSettings = { voice: boolean; effects: boolean; music: boolean };
 export type AudioMonitorEvent = {
-  event: "audio_ready" | "audio_settings_changed" | "audio_asset_failed" | "audio_bgm_started" | "audio_bgm_stopped";
+  event: "audio_ready" | "audio_settings_changed" | "audio_asset_failed" | "audio_bgm_started" | "audio_bgm_stopped" | "audio_voice_requested";
   channel?: AudioChannel;
   asset?: string;
+  tile?: TileCode;
   reason?: string;
   voice?: boolean;
   effects?: boolean;
@@ -18,13 +19,13 @@ const SOUND_ROOT = "/assets/babykylin/sounds";
 const SETTINGS_KEY = "mahjong-audio-v2";
 
 const honorVoiceIds: Record<string, number> = {
-  red: 31,
-  green: 41,
-  white: 51,
-  east: 61,
-  south: 71,
-  west: 81,
-  north: 91,
+  east: 31,
+  west: 41,
+  south: 51,
+  north: 61,
+  red: 71,
+  green: 81,
+  white: 91,
 };
 
 const actionVoiceFiles: Record<ActionVoice, string> = {
@@ -144,7 +145,9 @@ export class MahjongAudioManager {
 
   playTile(tile: TileCode): void {
     if (!this.settings.voice) return;
-    this.playOneShot(tileVoicePath(tile), "voice", 0.9, true);
+    const path = tileVoicePath(tile);
+    this.monitor({ event: "audio_voice_requested", channel: "voice", tile, asset: path.split("/").at(-1) });
+    this.playOneShot(path, "voice", 0.9, true);
   }
 
   playAction(action: ActionVoice): void {
