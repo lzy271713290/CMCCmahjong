@@ -100,11 +100,16 @@ body.in-game { overflow: hidden; background: #062f2b; }
 body.in-game .shell { display: none; }
 .game-screen { position: fixed; inset: 0; overflow: hidden; background: #062d29; }
 .table-board {
+  --table-scale: 1;
+  --table-offset-x: 0px;
+  --table-offset-y: 0px;
   position: absolute;
   inset: 0;
   min-width: 720px;
   min-height: 390px;
   overflow: hidden;
+  transform-origin: 0 0;
+  transform: translate(var(--table-offset-x), var(--table-offset-y)) scale(var(--table-scale));
   background:
     linear-gradient(rgba(0,53,48,.05), rgba(0,20,19,.14)),
     url("/assets/babykylin/table/mahjong_table.jpg") center / 100% 100% no-repeat;
@@ -446,9 +451,10 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .hand-tile { --tile-scale: .65; width: 36px !important; height: 55px; }
   .self-hand { min-height: 58px; gap: 2px; }
   .self-area { right: 2.5%; left: 14%; bottom: 1%; }
-  .discards-bottom, .discards-top { grid-template-columns: repeat(6, 23px); width: 170px; min-height: 82px; }
-  .discards-left, .discards-right { grid-template-columns: repeat(4, 23px); width: 105px; min-height: 110px; }
-  .discard-tile { --tile-scale: .41; width: 23px; height: 35px; }
+  .discard-zone { gap: 2px; }
+  .discards-bottom, .discards-top { grid-template-columns: repeat(6, 20px); width: 148px; min-height: 72px; }
+  .discards-left, .discards-right { grid-template-columns: repeat(4, 20px); width: 92px; min-height: 96px; }
+  .discard-tile { --tile-scale: .36; width: 20px; height: 30px; }
   .table-hud { top: 6px; }
   .hud-room { padding: 5px 8px; }
   .hud-room strong { font-size: 14px; }

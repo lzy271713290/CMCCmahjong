@@ -31,6 +31,7 @@ const winds = ["东", "南", "西", "北"];
 const lobby = required<HTMLElement>("lobby");
 const room = required<HTMLElement>("room");
 const gameScreen = required<HTMLElement>("game-screen");
+const tableBoard = document.querySelector<HTMLElement>(".table-board");
 const waitingControls = required<HTMLElement>("waiting-controls");
 const spectatorStrip = required<HTMLElement>("spectator-strip");
 const waitingReadyButton = required<HTMLButtonElement>("waiting-ready");
@@ -2078,6 +2079,18 @@ function syncAudioSettingsUI(): void {
 
 const rotateTip = document.querySelector<HTMLElement>(".rotate-tip");
 let rotateTipTimer: number | undefined;
+function fitTableToViewport(): void {
+  if (!tableBoard) return;
+  const width = window.visualViewport?.width ?? window.innerWidth;
+  const height = window.visualViewport?.height ?? window.innerHeight;
+  const scale = Math.max(0.4, Math.min(1, Math.min(width / 720, height / 390)));
+  const fillsViewport = width >= 720 && height >= 390 && scale >= 1;
+  const offsetX = fillsViewport ? 0 : (width - 720 * scale) / 2;
+  const offsetY = fillsViewport ? 0 : (height - 390 * scale) / 2;
+  tableBoard.style.setProperty("--table-scale", String(scale));
+  tableBoard.style.setProperty("--table-offset-x", `${offsetX}px`);
+  tableBoard.style.setProperty("--table-offset-y", `${offsetY}px`);
+}
 function refreshRotateTip(): void {
   window.clearTimeout(rotateTipTimer);
   const portraitNarrow = window.matchMedia("(orientation: portrait) and (max-width: 700px)").matches;
@@ -2088,7 +2101,11 @@ function refreshRotateTip(): void {
 }
 window.addEventListener("resize", refreshRotateTip);
 window.addEventListener("orientationchange", refreshRotateTip);
+window.addEventListener("resize", fitTableToViewport);
+window.addEventListener("orientationchange", fitTableToViewport);
+window.visualViewport?.addEventListener("resize", fitTableToViewport);
 refreshRotateTip();
+fitTableToViewport();
 
 syncAudioSettingsUI();
 renderAvatarGrid(avatarGrid, selectedAvatar, pickLobbyAvatar);
