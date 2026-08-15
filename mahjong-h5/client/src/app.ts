@@ -12,6 +12,7 @@ type Feedback = {
   kind: FeedbackKind;
   tile?: TileCode;
   actionVoice?: ActionVoice;
+  suppressTileVoice?: boolean;
   sound?: EffectSound;
   resultSound?: "win" | "lose";
   visual?: TableEffectKind;
@@ -133,6 +134,7 @@ let pendingRequest: { type: string; timeout: number } | undefined;
 let feedbackTimer: number | undefined;
 let tableEffectTimer: number | undefined;
 const feedbackQueue: Feedback[] = [];
+const recentMeldAt = new Map<number, number>();
 const audioManager = new MahjongAudioManager(logAudioMonitor);
 let lastServerMessageAt = Date.now();
 let reconnectFeedbackPending = false;
@@ -146,6 +148,7 @@ let countdownTimer: number | undefined;
 let lastCountdownAlarmKey = "";
 const AVATAR_IDS = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"];
 let selectedAvatar = localStorage.getItem("mahjong-avatar") ?? "a1";
+let avatarDraft = selectedAvatar;
 if (!AVATAR_IDS.includes(selectedAvatar)) selectedAvatar = "a1";
 type ChatEntry = { seat?: number; senderId: string; senderName: string; senderAvatar: string; text: string; emote: boolean; ts: number };
 const chatHistory: ChatEntry[] = [];
@@ -194,9 +197,9 @@ function renderAvatarGrid(container: HTMLElement, current: string, onPick: (id: 
     image.alt = "";
     button.append(image);
     button.addEventListener("click", () => {
-      onPick(id);
       container.querySelectorAll(".avatar-option").forEach((option) => option.classList.remove("active"));
       button.classList.add("active");
+      onPick(id);
     });
     container.append(button);
   }
@@ -336,6 +339,7 @@ function handleMessage(message: ServerMessage): void {
     showNotice(`房间 ${message.roomCode} 已由管理员解散：${message.reason}`);
   } else if (message.type === "chat_message") {
     appendChatEntry(message.fromSeat, message.fromId, message.fromName, message.fromAvatar, message.text, false);
+    showChatBubble(message.fromSeat, message.fromId, message.text);
   } else if (message.type === "chat_emote") {
     appendChatEntry(message.fromSeat, message.fromId, message.fromName, message.fromAvatar, message.emote, true);
     if (message.emote.includes("slipper") || message.emote.includes("🩴") || message.emote.includes("👡")) {
@@ -1091,19 +1095,13 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
     return;
   }
 
-  if (after.discards.length > before.discards.length) {
-    for (const discard of after.discards.slice(before.discards.length).slice(-4)) {
-      enqueueFeedback({ text: `${playerName(next, discard.seat)} 打出 ${tileLabel(discard.tile)}`, kind: "discard", tile: discard.tile, seat: discard.seat });
-    }
-    document.querySelector(".discard-tile.latest")?.classList.add("new-discard");
-  }
-
   const oldMelds = new Map(before.melds.map((meld, index) => [`${meld.seat}:${index}`, JSON.stringify(meld)]));
   after.melds.forEach((meld, index) => {
     if (oldMelds.get(`${meld.seat}:${index}`) === JSON.stringify(meld)) return;
     const isChi = meld.kind === "chi";
     const isPeng = meld.kind === "peng";
     const label = isChi ? "吃" : isPeng ? "碰" : meld.kind === "special_gang" ? meld.growthCount ? "涨毛" : "特殊杠" : "杠";
+    recentMeldAt.set(meld.seat, Date.now());
     enqueueFeedback({
       text: `${playerName(next, meld.seat)} ${label}`,
       kind: "meld",
@@ -1112,6 +1110,14 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
       seat: meld.seat,
     });
   });
+
+  if (after.discards.length > before.discards.length) {
+    for (const discard of after.discards.slice(before.discards.length).slice(-4)) {
+      const suppressTileVoice = (recentMeldAt.get(discard.seat) ?? 0) > Date.now() - 4000;
+      enqueueFeedback({ text: `${playerName(next, discard.seat)} 打出 ${tileLabel(discard.tile)}`, kind: "discard", tile: discard.tile, seat: discard.seat, suppressTileVoice });
+    }
+    document.querySelector(".discard-tile.latest")?.classList.add("new-discard");
+  }
 
   if (!before.roundResult && after.roundResult) {
     if (after.roundResult.winnerSeats.length > 0) {
@@ -1178,7 +1184,7 @@ function showNextFeedback(): void {
 }
 
 function playFeedbackAudio(feedback: Feedback): void {
-  if (feedback.tile) {
+  if (feedback.tile && !feedback.actionVoice && !feedback.suppressTileVoice) {
     audioManager.playEffect("discard");
     window.setTimeout(() => audioManager.playTile(feedback.tile!), 55);
   }
@@ -1525,9 +1531,9 @@ function playSlipperThrow(fromSeat: number | undefined, fromId: string, toSeat?:
   const source = fromSeat === undefined
     ? document.querySelector<HTMLElement>(`.spectator-chip[data-spectator-id="${fromId}"]`)
     : document.querySelector<HTMLElement>(`.player-seat[data-seat="${fromSeat}"]`);
-  const target = toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"]`);
+  const target = toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"] .avatar-block`);
   const startRect = source?.getBoundingClientRect();
-  const endRect = target?.getBoundingClientRect() ?? source?.getBoundingClientRect();
+  const endRect = target?.getBoundingClientRect() ?? (toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"]`)?.getBoundingClientRect()) ?? source?.getBoundingClientRect();
   if (!startRect || !endRect) {
     showSmackBurst(window.innerWidth / 2, window.innerHeight / 2);
     return;
@@ -1609,14 +1615,35 @@ function showFloatingEmote(seat: number | undefined, senderId: string, emote: st
   window.setTimeout(() => bubble.remove(), 1700);
 }
 
+function showChatBubble(seat: number | undefined, senderId: string, text: string): void {
+  const target = seat === undefined
+    ? document.querySelector<HTMLElement>(`.spectator-chip[data-spectator-id="${senderId}"]`)
+    : document.querySelector<HTMLElement>(`.player-seat[data-seat="${seat}"] .avatar-block`);
+  const rect = target?.getBoundingClientRect();
+  if (!rect) return;
+  const bubble = document.createElement("div");
+  bubble.className = "chat-bubble";
+  bubble.textContent = text;
+  bubble.style.left = `${rect.left + rect.width / 2}px`;
+  bubble.style.top = `${rect.top - 4}px`;
+  throwEffect.append(bubble);
+  window.setTimeout(() => bubble.remove(), 2600);
+}
+
+function pickAvatarOverlay(id: string): void {
+  avatarDraft = id;
+  renderAvatarGrid(avatarOverlayGrid, id, pickAvatarOverlay);
+}
+
 function openAvatarPicker(): void {
-  renderAvatarGrid(avatarOverlayGrid, selectedAvatar, () => undefined);
+  avatarDraft = selectedAvatar;
+  renderAvatarGrid(avatarOverlayGrid, avatarDraft, pickAvatarOverlay);
   avatarOverlay.classList.remove("hidden");
 }
 
 function applyAvatarSelection(): void {
   const active = avatarOverlayGrid.querySelector<HTMLButtonElement>(".avatar-option.active");
-  const picked = active?.dataset.avatar ?? selectedAvatar;
+  const picked = active?.dataset.avatar ?? avatarDraft;
   selectedAvatar = AVATAR_IDS.includes(picked) ? picked : "a1";
   localStorage.setItem("mahjong-avatar", selectedAvatar);
   renderAvatarGrid(avatarGrid, selectedAvatar, pickLobbyAvatar);

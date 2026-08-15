@@ -44,17 +44,17 @@ test("闲家闭门自摸时庄家支付额外庄家倍数", () => {
   assert.deepEqual(result.payments.map((payment) => [payment.fromSeat, payment.amount]), [[0, 32], [2, 16], [3, 16]]);
 });
 
-test("碰碰胡和三不烙可以与闭门连续相乘", () => {
+test("碰碰胡和三不烙的倍数可以叠加", () => {
   const result = calculateHuPayments({
     winnerSeats: [1],
     fromSeat: 0,
     dealerSeat: 3,
     reason: "rob_kong_hu",
-    analyses: new Map([[1, { ...plainClosed, isPengPengHu: true, isSanBuLao: true }]]),
+    analyses: new Map([[1, { ...plainClosed, isClosed: false, isPengPengHu: true, isSanBuLao: true }]]),
     meldsBySeat: emptyMelds(),
   });
-  assert.equal(result.payments.find((payment) => payment.fromSeat === 0)?.amount, 64);
-  assert.equal(result.payments.find((payment) => payment.fromSeat === 3)?.amount, 64);
+  assert.equal(result.payments.find((payment) => payment.fromSeat === 0)?.amount, 32);
+  assert.equal(result.payments.find((payment) => payment.fromSeat === 3)?.amount, 32);
 });
 
 test("一炮多响时只有点炮者分别向赢家支付", () => {

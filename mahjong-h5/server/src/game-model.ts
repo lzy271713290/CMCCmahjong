@@ -333,7 +333,7 @@ function analyzeWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[])
     isPengPengHu: validDecompositions.some(
       (closed) => !exposed.hasSpecialGang && exposed.sequenceCount === 0 && closed.sequenceCount === 0,
     ),
-    isSanBuLao: validDecompositions.some((closed) => exposed.tripletCount + closed.tripletCount >= 3),
+    isSanBuLao: exposed.tripletCount >= 3,
   };
 }
 

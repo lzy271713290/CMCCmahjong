@@ -225,7 +225,7 @@ test("特殊杠按一个有杠面子参与胡牌并豁免一九与刻子", () =>
   assert.equal(canWinCompleteHand(concealed, specialMeld), true);
 });
 
-test("胡牌分析识别闭门、碰碰胡和三不烙", () => {
+test("胡牌分析识别闭门和碰碰胡，但手牌暗刻不计入三不烙", () => {
   const hand = makeTiles([
     "wan-1", "wan-1", "wan-1",
     "tong-2", "tong-2", "tong-2",
@@ -238,6 +238,44 @@ test("胡牌分析识别闭门、碰碰胡和三不烙", () => {
     isSevenPairs: false,
     isClosed: true,
     isPengPengHu: true,
+    isSanBuLao: false,
+  });
+});
+
+test("三不烙需要三组落地刻子，手牌暗刻不算", () => {
+  const hand = makeTiles([
+    "wan-1", "wan-1", "wan-1",
+    "tong-2", "tong-2",
+  ]);
+  const melds = [
+    { seat: 0, kind: "peng" as const, tiles: ["tiao-3", "tiao-3", "tiao-3"] as TileCode[], fromSeat: 1 },
+    { seat: 0, kind: "peng" as const, tiles: ["east", "east", "east"] as TileCode[], fromSeat: 2 },
+    { seat: 0, kind: "chi" as const, tiles: ["tong-3", "tong-4", "tong-5"] as TileCode[], fromSeat: 3 },
+  ];
+  assert.deepEqual(analyzeWinningHand(hand, undefined, melds), {
+    valid: true,
+    isSevenPairs: false,
+    isClosed: false,
+    isPengPengHu: false,
+    isSanBuLao: false,
+  });
+});
+
+test("三组落地刻子成立三不烙", () => {
+  const hand = makeTiles([
+    "wan-1", "wan-2", "wan-3",
+    "tong-2", "tong-2",
+  ]);
+  const melds = [
+    { seat: 0, kind: "peng" as const, tiles: ["tiao-3", "tiao-3", "tiao-3"] as TileCode[], fromSeat: 1 },
+    { seat: 0, kind: "peng" as const, tiles: ["east", "east", "east"] as TileCode[], fromSeat: 2 },
+    { seat: 0, kind: "peng" as const, tiles: ["red", "red", "red"] as TileCode[], fromSeat: 3 },
+  ];
+  assert.deepEqual(analyzeWinningHand(hand, undefined, melds), {
+    valid: true,
+    isSevenPairs: false,
+    isClosed: false,
+    isPengPengHu: false,
     isSanBuLao: true,
   });
 });

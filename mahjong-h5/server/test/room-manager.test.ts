@@ -282,6 +282,24 @@ test("单人联调时测试玩家自动完成回合并把出牌权还给真人",
   assert.equal(rooms.snapshotForPlayer(host.roomCode, host.playerToken).game?.selfHand?.length, 14);
 });
 
+
+test("测试玩家坐庄时会自动完成出牌并把回合交给真人", () => {
+  const rooms = new RoomManager(
+    () => 0,
+    (seats, dealerSeat, randomIndex, roundNumber) => createInitialGame(seats, 2, randomIndex, roundNumber),
+  );
+  const host = rooms.createRoom("单人测试");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+  rooms.setReady(host.roomCode, host.playerToken, true);
+  const started = rooms.startGame(host.roomCode, host.playerToken);
+  assert.equal(started.game?.dealerSeat, 2);
+  assert.equal(started.game?.stage, "awaiting_discard");
+  assert.equal(started.game?.turnSeat, 0);
+  assert.equal(started.game?.discards.length, 2);
+  assert.deepEqual(started.game?.handTileCounts, [14, 13, 13, 13]);
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, host.playerToken).game?.selfHand?.length, 14);
+});
+
 function createDeterministicFourPlayerGame(): { rooms: RoomManager; sessions: Session[]; started: RoomSnapshot } {
   const rooms = new RoomManager(() => 0);
   const sessions = [rooms.createRoom("东")];
@@ -630,6 +648,31 @@ test("闲家胡牌后由原庄下家坐庄", () => {
   assert.equal(next.game?.turnSeat, 1);
   assert.deepEqual(next.scoreTotals, [68, 148, 92, 92]);
   assert.deepEqual(next.game?.handTileCounts, [13, 14, 13, 13]);
+});
+
+
+test("有测试玩家时下一局庄家会跳过测试玩家", () => {
+  let firstFactoryCall = true;
+  const rooms = new RoomManager(
+    () => 0,
+    (seats, dealerSeat, randomIndex, roundNumber) => {
+      const usedDealer = firstFactoryCall ? 2 : dealerSeat;
+      firstFactoryCall = false;
+      return createImmediateWallExhaustedGame(seats, usedDealer, roundNumber);
+    },
+  );
+  const host = rooms.createRoom("单人测试");
+  const second = rooms.joinRoom(host.roomCode, "真人二");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+  rooms.setReady(host.roomCode, host.playerToken, true);
+  rooms.setReady(host.roomCode, second.playerToken, true);
+  const started = rooms.startGame(host.roomCode, host.playerToken);
+  assert.equal(started.game?.stage, "round_ended");
+  rooms.setReady(host.roomCode, host.playerToken, true);
+  rooms.setReady(host.roomCode, second.playerToken, true);
+  const next = rooms.startNextRound(host.roomCode, host.playerToken);
+  assert.equal(next.game?.dealerSeat, 0);
+  assert.equal(next.players.find((player) => player.seat === next.game?.dealerSeat)?.isTestPlayer, false);
 });
 
 function createImmediateWallExhaustedGame(

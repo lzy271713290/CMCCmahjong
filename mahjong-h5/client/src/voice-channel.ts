@@ -37,8 +37,11 @@ export class VoiceChannel {
       return { micOn: false };
     }
     try {
-      if (!navigator.mediaDevices?.getUserMedia || !window.isSecureContext) {
-        throw new Error("当前页面不是 HTTPS，浏览器禁止使用麦克风");
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error("当前浏览器不支持麦克风");
+      }
+      if (!window.isSecureContext) {
+        throw new Error("手机语音需要 HTTPS 或 localhost，当前 IP 地址无法开麦，请改用 HTTPS 域名访问");
       }
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true },

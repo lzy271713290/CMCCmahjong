@@ -592,7 +592,7 @@ export class RoomManager {
     this.recordPublicAction(room, { kind: "round_started", roundNumber: room.game.roundNumber, seat: dealerSeat });
     this.ensureActionDeadline(room, true);
     room.revision += 1;
-    return this.snapshot(room.code);
+    return this.autoDiscardTestDealer(room) ?? this.snapshot(room.code);
   }
 
   startNextRound(rawCode: string, playerToken: string): RoomSnapshot {
@@ -611,7 +611,14 @@ export class RoomManager {
     if (!previousResult) throw new RoomError("ROUND_ACTIVE", "本局尚未结束");
     const dealerContinues = previousResult.reason === "wall_exhausted"
       || previousResult.winnerSeats.includes(previous.dealerSeat);
-    const nextDealerSeat = dealerContinues ? previous.dealerSeat : (previous.dealerSeat + 1) % 4;
+    const hasTestPlayers = room.players.some((player) => player.isTestPlayer);
+    const realSeats = room.players.filter((player) => !player.isTestPlayer).map((player) => player.seat).sort((left, right) => left - right);
+    const previousDealer = room.players.find((player) => player.seat === previous.dealerSeat);
+    const nextDealerSeat = !hasTestPlayers
+      ? (dealerContinues ? previous.dealerSeat : (previous.dealerSeat + 1) % 4)
+      : dealerContinues && previousDealer && !previousDealer.isTestPlayer
+        ? previous.dealerSeat
+        : (realSeats.find((seat) => seat > previous.dealerSeat) ?? realSeats[0] ?? previous.dealerSeat);
     const nextRoundNumber = previous.roundNumber + 1;
     const nextGame = this.gameFactory(
       room.players.map((player) => player.seat),
@@ -625,7 +632,7 @@ export class RoomManager {
     this.recordPublicAction(room, { kind: "round_started", roundNumber: nextRoundNumber, seat: nextDealerSeat });
     this.ensureActionDeadline(room, true);
     room.revision += 1;
-    return this.snapshot(room.code);
+    return this.autoDiscardTestDealer(room) ?? this.snapshot(room.code);
   }
 
   requestEarlySettlement(rawCode: string, playerToken: string): EarlySettlementProgress {
@@ -1430,6 +1437,17 @@ export class RoomManager {
           }
         : undefined,
     };
+  }
+
+  private autoDiscardTestDealer(room: Room): RoomSnapshot | undefined {
+    const game = room.game;
+    if (!game || game.stage !== "awaiting_discard") return undefined;
+    const dealer = room.players.find((player) => player.seat === game.dealerSeat && player.isTestPlayer);
+    if (!dealer) return undefined;
+    const hand = game.hands.get(dealer.seat) ?? [];
+    const tile = game.lastDraw?.seat === dealer.seat ? game.lastDraw.tile.code : hand.at(-1)?.code;
+    if (!tile) throw new Error("测试玩家坐庄时没有可出的手牌");
+    return this.discardTile(room.code, dealer.token, tile).snapshot;
   }
 
   private progressFromDiscard(
