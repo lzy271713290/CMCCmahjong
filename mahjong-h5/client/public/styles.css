@@ -169,8 +169,8 @@ body.in-game .shell { display: none; }
 .opponent-rack { display: flex; align-items: center; justify-content: center; }
 .seat-top .opponent-rack { position: absolute; top: 74px; left: 50%; transform: translateX(-50%); }
 .seat-left .opponent-rack, .seat-right .opponent-rack { position: absolute; top: 38%; flex-direction: column; }
-.seat-left .opponent-rack { left: 82px; }
-.seat-right .opponent-rack { right: 82px; }
+.seat-left .opponent-rack { left: 150px; }
+.seat-right .opponent-rack { right: 150px; }
 .opponent-rack .tile-back { width: 17px; height: 25px; margin-right: -5px; }
 .seat-left .opponent-rack .tile-back, .seat-right .opponent-rack .tile-back { margin: -10px 0 0; }
 
@@ -200,15 +200,15 @@ body.in-game .shell { display: none; }
 .discards-left { left: 27%; transform: translateY(-50%) rotate(90deg); }
 .discards-right { right: 27%; transform: translateY(-50%) rotate(-90deg); }
 
-.center-console { position: absolute; z-index: 14; top: 46%; left: 50%; width: 150px; height: 150px; transform: translate(-50%,-50%); border: 3px solid rgba(206,196,119,.6); border-radius: 50%; background: radial-gradient(circle, rgba(9,81,74,.96) 0 42%, rgba(1,44,41,.95) 43% 70%, rgba(4,29,29,.92) 71%); box-shadow: 0 10px 28px rgba(0,0,0,.45), inset 0 0 18px rgba(126,224,194,.25); }
-.center-console::before { content: ""; position: absolute; inset: 17px; border: 1px solid rgba(152,218,194,.38); border-radius: 18px; transform: rotate(45deg); }
-.center-wind { position: absolute; display: grid; width: 28px; height: 28px; place-items: center; border-radius: 50%; color: #88afa4; font-size: 13px; font-weight: 800; transition: .2s; }
-.wind-top { top: 4px; left: 59px; }
-.wind-right { top: 59px; right: 4px; }
-.wind-bottom { bottom: 4px; left: 59px; }
-.wind-left { top: 59px; left: 4px; }
+.center-console { position: absolute; z-index: 14; top: 48%; left: 50%; width: 108px; height: 108px; transform: translate(-50%,-50%); border: 3px solid rgba(206,196,119,.6); border-radius: 50%; background: radial-gradient(circle, rgba(9,81,74,.96) 0 42%, rgba(1,44,41,.95) 43% 70%, rgba(4,29,29,.92) 71%); box-shadow: 0 10px 28px rgba(0,0,0,.45), inset 0 0 18px rgba(126,224,194,.25); }
+.center-console::before { content: ""; position: absolute; inset: 12px; border: 1px solid rgba(152,218,194,.38); border-radius: 18px; transform: rotate(45deg); }
+.center-wind { position: absolute; display: grid; width: 24px; height: 24px; place-items: center; border-radius: 50%; color: #88afa4; font-size: 12px; font-weight: 800; transition: .2s; }
+.wind-top { top: 6px; left: 42px; }
+.wind-right { top: 42px; right: 6px; }
+.wind-bottom { bottom: 6px; left: 42px; }
+.wind-left { top: 42px; left: 6px; }
 .active-top .wind-top, .active-right .wind-right, .active-bottom .wind-bottom, .active-left .wind-left { background: #d8b94f; color: #173e35; box-shadow: 0 0 12px #e8cf67; }
-.center-countdown { position: absolute; inset: 48px; display: grid; place-content: center; text-align: center; }
+.center-countdown { position: absolute; inset: 34px; display: grid; place-content: center; text-align: center; }
 .center-countdown strong { color: #ffe89c; font-family: ui-monospace, Consolas, monospace; font-size: 10px; line-height: 1; text-shadow: 0 0 12px #73d7bc; }
 .center-countdown span { display: none; }
 .center-countdown.urgent strong { color: #ff9881; animation: active-player .65s ease-in-out infinite; }
@@ -352,10 +352,10 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
 .discard-tile.latest.new-discard { animation: discard-land .3s cubic-bezier(.18,.75,.32,1.25) both; }
 .meld-rack { position: absolute; z-index: 5; display: flex; gap: 4px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.35)); }
 .meld-group { display: flex; gap: 1px; padding: 2px; border-radius: 3px; background: rgba(0,40,35,.45); }
-.seat-bottom .meld-rack { left: 3%; bottom: 20%; right: auto; }
+.seat-bottom .meld-rack { left: 3%; bottom: -30px; right: auto; }
 .seat-top .meld-rack { top: 84px; right: 16px; left: auto; transform: none; }
-.seat-left .meld-rack { top: 38%; left: 112px; flex-direction: column; }
-.seat-right .meld-rack { top: 38%; right: 112px; flex-direction: column; }
+.seat-left .meld-rack { top: 38%; left: 150px; flex-direction: column; }
+.seat-right .meld-rack { top: 38%; right: 150px; flex-direction: column; }
 .seat-left .meld-group, .seat-right .meld-group { flex-direction: column; }
 .game-notice { position: absolute; z-index: 35; right: 0; bottom: 20%; left: 0; margin: 0; color: #ffe7a5; text-align: center; text-shadow: 0 2px 5px #002b25; font-size: 12px; pointer-events: none; }
 .rotate-tip { display: none; transition: opacity .35s ease, visibility .35s ease; }
@@ -387,8 +387,8 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .seat-top .opponent-rack { top: 58px; }
   .seat-left, .seat-right { top: 30%; }
   .seat-left .opponent-rack, .seat-right .opponent-rack { top: 36%; }
-  .seat-left .opponent-rack { left: 68px; }
-  .seat-right .opponent-rack { right: 68px; }
+  .seat-left .opponent-rack { left: 128px; }
+  .seat-right .opponent-rack { right: 128px; }
   .opponent-rack .tile-back { width: 14px; height: 21px; }
   .tile-wall .tile-back { width: 20px; height: 29px; }
   .wall-left .tile-back, .wall-right .tile-back { width: 18px; height: 25px; margin-top: -14px; }
@@ -399,14 +399,14 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .waiting-controls button { min-height: 28px; padding: 3px 8px; font-size: 10px; }
   .spectator-strip { top: 46px; }
   .spectator-name { max-width: 78px; }
-  .center-console { width: 116px; height: 116px; }
-  .center-console::before { inset: 14px; }
-  .center-wind { width: 23px; height: 23px; font-size: 11px; }
-  .wind-top { top: 2px; left: 44px; }
-  .wind-right { top: 44px; right: 2px; }
-  .wind-bottom { bottom: 2px; left: 44px; }
-  .wind-left { top: 44px; left: 2px; }
-  .center-countdown { inset: 38px; }
+  .center-console { width: 84px; height: 84px; }
+  .center-console::before { inset: 10px; }
+  .center-wind { width: 20px; height: 20px; font-size: 10px; }
+  .wind-top { top: 5px; left: 32px; }
+  .wind-right { top: 32px; right: 5px; }
+  .wind-bottom { bottom: 5px; left: 32px; }
+  .wind-left { top: 32px; left: 5px; }
+  .center-countdown { inset: 26px; }
   .center-countdown strong { font-size: 9px; }
   .turn-status { top: calc(100% + 4px); font-size: 10px; }
   .operation-panel { bottom: 17%; gap: 7px; }
@@ -421,10 +421,10 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .audio-settings small { font-size: 8px; }
   .audio-settings .audio-gender { font-size: 9px; }
   .table-effect .fx-particle { width: 7px; height: 7px; }
-  .seat-bottom .meld-rack { left: 1%; bottom: 17%; right: auto; }
+  .seat-bottom .meld-rack { left: 1%; bottom: -30px; right: auto; }
   .seat-top .meld-rack { top: 72px; right: 8px; }
-  .seat-left .meld-rack { top: 36%; left: 96px; }
-  .seat-right .meld-rack { top: 36%; right: 96px; }
+  .seat-left .meld-rack { top: 36%; left: 128px; }
+  .seat-right .meld-rack { top: 36%; right: 128px; }
   .public-chat { width: min(290px, 92%); height: min(340px, 76%); font-size: 11px; }
   .chat-entry { font-size: 11px; }
   .matrix-row { grid-template-columns: minmax(52px,1fr) repeat(4, 0.9fr) auto auto; gap: 2px; padding: 2px; font-size: 9px; }
@@ -454,6 +454,16 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .hud-room strong { font-size: 14px; }
   .round-label { padding: 5px 10px; font-size: 10px; }
   .status { padding: 5px 7px; font-size: 10px; }
+}
+
+@media (max-height: 460px) {
+  .center-console { top: 77%; left: 50%; width: 160px; height: 18px; display: flex; align-items: center; justify-content: center; gap: 7px; transform: translate(-50%, -50%); border: 1px solid rgba(206,196,119,.55); border-radius: 999px; background: rgba(1,44,41,.8); box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+  .center-console::before { display: none; }
+  .center-wind { position: relative; inset: auto; width: 14px; height: 14px; font-size: 8px; }
+  .center-countdown { position: relative; inset: auto; display: inline-flex; align-items: center; }
+  .center-countdown strong { font-size: 8px; }
+  body:has(.operation-panel:not(.hidden)) .center-console { display: none; }
+  .game-notice { display: none; }
 }
 
 @media (max-width: 900px) and (orientation: landscape) {
