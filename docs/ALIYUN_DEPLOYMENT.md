@@ -58,7 +58,7 @@ pnpm install --frozen-lockfile
 pnpm test
 ```
 
-七十项自动测试全部通过后，启动服务：
+七十四项自动测试全部通过后，启动服务：
 
 ```bash
 cd /opt/CMCCmahjong/mahjong-h5
@@ -70,6 +70,14 @@ pnpm start
 ```text
 麻将联机样板已启动：http://localhost:3000
 ```
+
+后台管理默认关闭。如需启用，在启动前设置 `ADMIN_TOKEN`：
+
+```bash
+ADMIN_TOKEN=你的后台令牌 pnpm start
+```
+
+启动后访问 `http://服务器公网IP:3000/admin?token=你的后台令牌`；未配置令牌时 `/admin` 返回 503。
 
 当前是前台运行，终端不能关闭；按 `Ctrl+C` 会停止服务并清空内存中的房间。
 
@@ -191,7 +199,7 @@ grep -E '"event":"(server_started|room_created|room_joined|room_reconnected)"' l
 grep '"event":"game_model_initialized"' logs/server.jsonl | tail -n 20
 ```
 
-正常 JSON 日志应包含 `"modelVersion":"audio-mapping-v15"`、`"wallRemaining":83` 和 `"totalTiles":136`；`handTileCounts` 中应恰好一家14张、三家13张。日志不会记录具体手牌或暗杠牌面。
+正常 JSON 日志应包含 `"modelVersion":"admin-monitor-v16"`、`"wallRemaining":83` 和 `"totalTiles":136`；`handTileCounts` 中应恰好一家14张、三家13张。日志不会记录具体手牌或暗杠牌面。
 
 无需创建房间即可确认当前服务实例和版本：
 
@@ -199,7 +207,7 @@ grep '"event":"game_model_initialized"' logs/server.jsonl | tail -n 20
 curl -s http://127.0.0.1:3000/healthz
 ```
 
-应返回 `"ok":true`、`"modelVersion":"audio-mapping-v15"`、8位 `instanceId` 和运行秒数。
+应返回 `"ok":true`、`"modelVersion":"admin-monitor-v16"`、8位 `instanceId` 和运行秒数。
 
 验证私有发牌、重连恢复、出牌、自动响应与回合推进监控事件：
 
@@ -211,15 +219,16 @@ grep -E '"event":"(private_hands_distributed|private_hand_restored|tile_discarde
 
 ```bash
 cd mahjong-h5
-node scripts/websocket-smoke.mjs ws://服务器公网IP:3000/ws audio-mapping-v15
+node scripts/websocket-smoke.mjs ws://服务器公网IP:3000/ws admin-monitor-v16
+node scripts/admin-smoke.mjs http://服务器公网IP:3000 你的后台令牌 admin-monitor-v16
 ```
 
-命令退出码为0，并返回 `"modelVersion":"audio-mapping-v15"`、`"matchRounds":16`、`"gamePhase":"playing"`、局中解散暂停/拒绝恢复、两轮牌墙递减、公共记录隐私，以及 `voiceAsset`、`musicAsset`、`effectAsset`、`audioModule`、`replayModule` 和 `health` 检查结果，表示核心联机与音画资源路由通过。
+命令退出码为0，并返回 `"modelVersion":"admin-monitor-v16"`、`"matchRounds":16`、`"gamePhase":"playing"`、局中解散暂停/拒绝恢复、两轮牌墙递减、公共记录隐私，以及 `voiceAsset`、`musicAsset`、`effectAsset`、`audioModule`、`replayModule` 和 `health` 检查结果，表示核心联机与音画资源路由通过。
 
 执行四真人完整一局、投票中断线恢复和最终结算验收：
 
 ```bash
-node scripts/full-round-smoke.mjs ws://服务器公网IP:3000/ws audio-mapping-v15
+node scripts/full-round-smoke.mjs ws://服务器公网IP:3000/ws admin-monitor-v16
 ```
 
 退出码为0，并返回 `"discardCount":84`、`"roundReason":"wall_exhausted"`、`"wallRemaining":0`、`"reconnectVoteRestored":true`、`"matchEndReason":"early_agreement"`、`"rankingCount":4`、`"publicActionCount":92` 和 `"publicActionsPrivateDataFree":true`，表示朋友临时联网版的完整网络主链路和公共记录通过。

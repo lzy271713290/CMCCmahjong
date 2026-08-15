@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CMCC 后台监控</title>
+<style>
+:root { color-scheme: dark; --bg:#0f1115; --panel:#171b22; --line:#2a303b; --text:#e6e9ef; --muted:#9aa4b2; --accent:#4da3ff; --ok:#37c871; --warn:#ffb454; --bad:#ff7b7b; }
+* { box-sizing:border-box; }
+body { margin:0; background:var(--bg); color:var(--text); font:14px/1.5 "Microsoft YaHei", system-ui, sans-serif; }
+header { padding:16px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:14px; flex-wrap:wrap; }
+h1 { font-size:18px; margin:0; font-weight:600; }
+h2 { font-size:15px; margin:18px 0 10px; }
+main { max-width:1200px; margin:0 auto; padding:20px; }
+.cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:14px 0; }
+.card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:12px 14px; }
+.card .label { color:var(--muted); font-size:12px; }
+.card .value { font-size:22px; font-weight:600; margin-top:4px; }
+table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); border-radius:8px; }
+th, td { text-align:left; padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+th { color:var(--muted); font-weight:500; background:#141922; }
+tr:last-child td { border-bottom:0; }
+tbody tr { cursor:pointer; }
+tbody tr:hover td { background:#1b222d; }
+button { background:#1e2632; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:7px 12px; cursor:pointer; }
+button:hover { border-color:var(--accent); }
+input { background:#0d1016; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:8px 10px; min-width:260px; }
+.badge { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; }
+.badge.waiting { background:#1d2c22; color:var(--ok); }
+.badge.playing { background:#2c251d; color:var(--warn); }
+.badge.completed { background:#2a1f22; color:var(--bad); }
+.detail { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-top:16px; }
+pre { overflow:auto; max-height:420px; background:#0d1016; border:1px solid var(--line); border-radius:6px; padding:12px; font:12px/1.5 Consolas, monospace; }
+.muted { color:var(--muted); }
+@media (max-width:720px) { header { padding:14px; } main { padding:12px; } .cards { grid-template-columns:repeat(2,1fr); } .table-wrap { overflow-x:auto; } }
+</style>
+</head>
+<body>
+<header>
+<h1>CMCC 后台监控</h1>
+<span class="muted" id="version"></span>
+<button type="button" id="refresh" hidden>刷新</button>
+</header>
+<main>
+<section id="login">
+<h2>后台令牌</h2>
+<p class="muted">输入 ADMIN_TOKEN 后进入监控。</p>
+<form id="login-form"><input id="token" type="password" placeholder="ADMIN_TOKEN"><button type="submit">进入</button></form>
+</section>
+<section id="dashboard" hidden>
+<div class="cards" id="cards"></div>
+<div class="table-wrap">
+<table>
+<thead><tr><th>房号</th><th>状态</th><th>人数</th><th>真人</th><th>在线</th><th>准备</th><th>局数</th><th>牌墙</th><th>阶段</th><th>动作</th><th>房主</th></tr></thead>
+<tbody id="rooms"></tbody>
+</table>
+</div>
+<div class="detail" id="detail" hidden><h2 id="detail-title"></h2><div id="detail-content"></div></div>
+</section>
+</main>
+<script>
+const tokenKey = "cmcc-admin-token";
+let token = sessionStorage.getItem(tokenKey) || "";
+let currentRoom = "";
+function api(path) { return fetch(path + (path.indexOf("?") >= 0 ? "&" : "?") + "token=" + encodeURIComponent(token)); }
+function esc(value) { return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch])); }
+function statusBadge(status) { return '<span class="badge ' + esc(status) + '">' + esc(status) + '</span>'; }
+function showLogin() { document.getElementById("dashboard").hidden = true; document.getElementById("login").hidden = false; }
+function showDashboard() { document.getElementById("login").hidden = true; document.getElementById("dashboard").hidden = false; document.getElementById("refresh").hidden = false; }
+async function loadSummary() {
+  const response = await api("/api/admin/summary");
+  if (response.status === 401) { sessionStorage.removeItem(tokenKey); showLogin(); return; }
+  if (!response.ok) throw new Error("概览请求失败：" + response.status);
+  const data = await response.json();
+  document.getElementById("version").textContent = data.modelVersion + " · " + data.instanceId + " · 运行 " + data.uptimeSeconds + "s";
+  const cards = [
+    { label: "房间", value: data.roomCount },
+    { label: "进行中", value: data.playingRoomCount },
+    { label: "等待中", value: data.waitingRoomCount },
+    { label: "在线真人", value: data.connectedPlayerCount },
+    { label: "真人总数", value: data.realPlayerCount },
+    { label: "测试玩家", value: data.testPlayerCount },
+    { label: "WebSocket", value: data.connectedSockets }
+  ];
+  document.getElementById("cards").innerHTML = cards.map((card) => '<div class="card"><div class="label">' + esc(card.label) + '</div><div class="value">' + esc(card.value) + '</div></div>').join("");
+  const rows = (data.rooms || []).map((room) => {
+    return '<tr data-code="' + esc(room.code) + '"><td>' + esc(room.code) + '</td><td>' + statusBadge(room.phase) + '</td><td>' + esc(room.playerCount) + '</td><td>' + esc(room.realPlayerCount) + '</td><td>' + esc(room.connectedPlayerCount) + '</td><td>' + esc(room.readyCount) + '</td><td>' + esc(room.completedRounds + "/" + room.totalRounds) + '</td><td>' + esc(room.wallRemaining ?? "-") + '</td><td>' + esc(room.stage ?? (room.phase === "waiting" ? "waiting" : room.phase)) + '</td><td>' + esc(room.publicActionCount) + '</td><td>' + esc(room.hostName ?? "-") + '</td></tr>';
+  }).join("");
+  document.getElementById("rooms").innerHTML = rows;
+  if (currentRoom) loadRoom(currentRoom);
+}
+async function loadRoom(code) {
+  currentRoom = code;
+  const response = await api("/api/admin/rooms/" + encodeURIComponent(code));
+  if (response.status === 401) { sessionStorage.removeItem(tokenKey); showLogin(); return; }
+  if (!response.ok) throw new Error("房间详情请求失败：" + response.status);
+  const data = await response.json();
+  const room = data.room;
+  document.getElementById("detail").hidden = false;
+  document.getElementById("detail-title").textContent = "房间 " + room.code + " 详情";
+  const playerRows = room.players.map((player) => '<tr><td>' + esc(player.seat) + '</td><td>' + esc(player.name) + '</td><td>' + esc(player.isHost ? "房主" : "-") + '</td><td>' + esc(player.isTestPlayer ? "测试" : "真人") + '</td><td>' + esc(player.connected ? "在线" : "离线") + '</td><td>' + esc(player.autoManaged ? "托管" : "-") + '</td><td>' + esc(player.offlineSeconds ?? "-") + '</td></tr>').join("");
+  const game = room.game ? {
+    roundNumber: room.game.roundNumber,
+    dealerSeat: room.game.dealerSeat,
+    turnSeat: room.game.turnSeat,
+    stage: room.game.stage,
+    wallRemaining: room.game.wallRemaining,
+    handTileCounts: room.game.handTileCounts,
+    actionDeadlineAt: room.game.actionDeadlineAt,
+    discards: room.game.discards.length,
+    melds: room.game.melds.length
+  } : null;
+  const content = '<h3>玩家</h3><table><thead><tr><th>座位</th><th>昵称</th><th>身份</th><th>类型</th><th>连接</th><th>托管</th><th>离线秒</th></tr></thead><tbody>' + playerRows + '</tbody></table><h3>牌桌公开状态</h3><pre>' + esc(JSON.stringify({ game: game, scoreTotals: room.scoreTotals, publicActionCount: room.publicActions.length }, null, 2)) + '</pre><h3>最近公共动作</h3><pre>' + esc(JSON.stringify(room.publicActions.slice(-20), null, 2)) + '</pre>';
+  document.getElementById("detail-content").innerHTML = content;
+}
+document.getElementById("login-form").addEventListener("submit", (event) => { event.preventDefault(); token = document.getElementById("token").value.trim(); if (!token) return; sessionStorage.setItem(tokenKey, token); showDashboard(); loadSummary(); });
+document.getElementById("rooms").addEventListener("click", (event) => { const row = event.target.closest("tr[data-code]"); if (row) loadRoom(row.dataset.code); });
+document.getElementById("refresh").addEventListener("click", () => loadSummary());
+if (token) { showDashboard(); loadSummary(); setInterval(loadSummary, 5000); }
+</script>
+</body>
+</html>

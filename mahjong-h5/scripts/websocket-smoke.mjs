@@ -1,8 +1,9 @@
 import WebSocket from "ws";
 import { findDiscardReactionOptions } from "../dist/server/src/game-model.js";
 
-const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
-const expectedVersion = process.argv[3] ?? "audio-mapping-v15";
+const args = process.argv.slice(2).filter((arg) => arg !== "--");
+const serverUrl = args[0] ?? "ws://127.0.0.1:3000/ws";
+const expectedVersion = args[1] ?? "admin-monitor-v16";
 const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
 
 function open() {

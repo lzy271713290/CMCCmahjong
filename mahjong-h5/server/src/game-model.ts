@@ -11,7 +11,7 @@ import type {
   TurnOperationOption,
 } from "../../shared/protocol.js";
 
-export const GAME_MODEL_VERSION = "audio-mapping-v15";
+export const GAME_MODEL_VERSION = "admin-monitor-v16";
 
 export type Tile = {
   code: TileCode;

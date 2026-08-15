@@ -1,6 +1,6 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { randomUUID } from "node:crypto";
-import { createServer } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { extname, isAbsolute, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -10,6 +10,7 @@ import { instanceId, logError, logInfo, logWarn, shortId } from "./logger.js";
 import { GAME_MODEL_VERSION } from "./game-model.js";
 
 const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
+const adminToken = process.env.ADMIN_TOKEN;
 const manager = new RoomManager();
 const socketsByToken = new Map<string, WebSocket>();
 const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string }>();
@@ -27,14 +28,70 @@ const mimeTypes: Record<string, string> = {
   ".mp3": "audio/mpeg",
 };
 
+function adminAuthorized(request: IncomingMessage): boolean {
+  if (!adminToken) return false;
+  const url = new URL(request.url ?? "/", "http://localhost");
+  if (url.searchParams.get("token") === adminToken) return true;
+  return request.headers.authorization === `Bearer ${adminToken}`;
+}
+
+function adminSummaryPayload() {
+  return {
+    ok: true,
+    modelVersion: GAME_MODEL_VERSION,
+    instanceId,
+    pid: process.pid,
+    port,
+    uptimeSeconds: Math.floor(process.uptime()),
+    nodeVersion: process.version,
+    connectedSockets: webSockets.clients.size,
+    ...manager.adminStats(),
+    rooms: manager.listAdminRooms(),
+  };
+}
+
 const server = createServer((request, response) => {
   const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
   if (pathname === "/healthz") {
     response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-    response.end(JSON.stringify({ ok: true, modelVersion: GAME_MODEL_VERSION, instanceId, uptimeSeconds: Math.floor(process.uptime()) }));
+    response.end(JSON.stringify({ ok: true, modelVersion: GAME_MODEL_VERSION, instanceId, uptimeSeconds: Math.floor(process.uptime()), roomCount: manager.adminStats().roomCount, connectedSockets: webSockets.clients.size }));
     return;
   }
   let filePath: string | undefined;
+  if (pathname === "/admin" || pathname === "/admin.html") {
+    if (!adminToken) {
+      response.writeHead(503, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code: "ADMIN_DISABLED", message: "未配置 ADMIN_TOKEN，后台管理已关闭" }));
+      return;
+    }
+    filePath = join(projectRoot, "client/public/admin.html");
+  } else if (pathname === "/api/admin/summary") {
+    if (!adminAuthorized(request)) {
+      response.writeHead(401, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code: "ADMIN_UNAUTHORIZED", message: "后台令牌无效" }));
+      return;
+    }
+    response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+    response.end(JSON.stringify(adminSummaryPayload()));
+    return;
+  } else if (pathname.startsWith("/api/admin/rooms/")) {
+    if (!adminAuthorized(request)) {
+      response.writeHead(401, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code: "ADMIN_UNAUTHORIZED", message: "后台令牌无效" }));
+      return;
+    }
+    const roomCode = decodeURIComponent(pathname.slice("/api/admin/rooms/".length));
+    try {
+      const room = manager.getAdminRoom(roomCode);
+      response.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: true, room }));
+    } catch (error) {
+      const code = error instanceof RoomError ? error.code : "BAD_ROOM";
+      response.writeHead(code === "ROOM_NOT_FOUND" ? 404 : 400, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      response.end(JSON.stringify({ ok: false, code, message: error instanceof Error ? error.message : "房间查询失败" }));
+    }
+    return;
+  }
   if (pathname === "/app.js") filePath = join(projectRoot, "dist/client/src/app.js");
   else if (pathname === "/audio-manager.js") filePath = join(projectRoot, "dist/client/src/audio-manager.js");
   else if (pathname === "/public-replay.js") filePath = join(projectRoot, "dist/client/src/public-replay.js");

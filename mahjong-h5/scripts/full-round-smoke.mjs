@@ -1,7 +1,8 @@
 import WebSocket from "ws";
 
-const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
-const expectedVersion = process.argv[3];
+const args = process.argv.slice(2).filter((arg) => arg !== "--");
+const serverUrl = args[0] ?? "ws://127.0.0.1:3000/ws";
+const expectedVersion = args[1];
 const timeoutMs = 12_000;
 
 function openSocket() {

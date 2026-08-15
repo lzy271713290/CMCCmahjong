@@ -148,6 +148,74 @@ export type LeaveRoomResult = {
   snapshot?: RoomSnapshot;
 };
 
+export type AdminRoomPlayerView = {
+  name: string;
+  seat: number;
+  ready: boolean;
+  connected: boolean;
+  isHost: boolean;
+  isTestPlayer: boolean;
+  autoManaged: boolean;
+  offlineSeconds?: number;
+};
+
+export type AdminRoomSummary = {
+  code: string;
+  phase: Room["phase"];
+  playerCount: number;
+  connectedPlayerCount: number;
+  realPlayerCount: number;
+  testPlayerCount: number;
+  readyCount: number;
+  totalRounds: MatchMode;
+  completedRounds: number;
+  matchStatus: "waiting" | "active" | "completed";
+  matchEndReason?: "round_limit" | "negative_score" | "early_agreement";
+  hostName?: string;
+  roundNumber?: number;
+  stage?: NonNullable<RoomSnapshot["game"]>["stage"];
+  wallRemaining?: number;
+  scoreTotals: number[];
+  publicActionCount: number;
+};
+
+export type AdminRoomDetail = {
+  code: string;
+  revision: number;
+  phase: Room["phase"];
+  players: AdminRoomPlayerView[];
+  scoreTotals: number[];
+  match: RoomSnapshot["match"];
+  publicActions: PublicActionView[];
+  game?: {
+    modelVersion: string;
+    roundNumber: number;
+    dealerSeat: number;
+    turnSeat: number;
+    stage: NonNullable<RoomSnapshot["game"]>["stage"];
+    wallRemaining: number;
+    handTileCounts: number[];
+    actionDeadlineAt?: number;
+    actionTimeoutSeconds?: number;
+    latestDiscard?: DiscardView;
+    discards: DiscardView[];
+    melds: MeldView[];
+    scorePayments: ScorePaymentView[];
+    scoreDeltas: number[];
+    reaction?: NonNullable<RoomSnapshot["game"]>["reaction"];
+    roundResult?: NonNullable<RoomSnapshot["game"]>["roundResult"];
+  };
+};
+
+export type AdminStats = {
+  roomCount: number;
+  waitingRoomCount: number;
+  playingRoomCount: number;
+  connectedPlayerCount: number;
+  realPlayerCount: number;
+  testPlayerCount: number;
+};
+
 type ReactionWindowDiagnostic = {
   discard: DiscardView;
   eligibleSeats: number[];
@@ -831,6 +899,96 @@ export class RoomManager {
     const viewer = room.players.find((player) => player.token === playerToken);
     if (!viewer) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
     return this.buildSnapshot(room, viewer);
+  }
+
+  adminStats(): AdminStats {
+    const rooms = [...this.rooms.values()];
+    let waitingRoomCount = 0;
+    let playingRoomCount = 0;
+    let connectedPlayerCount = 0;
+    let realPlayerCount = 0;
+    let testPlayerCount = 0;
+    for (const room of rooms) {
+      if (room.phase === "waiting") waitingRoomCount += 1;
+      else playingRoomCount += 1;
+      for (const player of room.players) {
+        if (player.isTestPlayer) testPlayerCount += 1;
+        else {
+          realPlayerCount += 1;
+          if (player.connected) connectedPlayerCount += 1;
+        }
+      }
+    }
+    return { roomCount: rooms.length, waitingRoomCount, playingRoomCount, connectedPlayerCount, realPlayerCount, testPlayerCount };
+  }
+
+  listAdminRooms(): AdminRoomSummary[] {
+    return [...this.rooms.values()]
+      .sort((left, right) => left.code.localeCompare(right.code))
+      .map((room) => ({
+        code: room.code,
+        phase: room.phase,
+        playerCount: room.players.length,
+        connectedPlayerCount: room.players.filter((player) => !player.isTestPlayer && player.connected).length,
+        realPlayerCount: room.players.filter((player) => !player.isTestPlayer).length,
+        testPlayerCount: room.players.filter((player) => player.isTestPlayer).length,
+        readyCount: room.players.filter((player) => player.ready).length,
+        totalRounds: room.totalRounds,
+        completedRounds: room.completedRounds,
+        matchStatus: room.matchEndReason ? "completed" : room.phase === "playing" ? "active" : "waiting",
+        matchEndReason: room.matchEndReason,
+        hostName: room.players.find((player) => player.id === room.hostPlayerId)?.name,
+        roundNumber: room.game?.roundNumber,
+        stage: room.game?.stage,
+        wallRemaining: room.game?.wall.length,
+        scoreTotals: [...room.scoreTotals],
+        publicActionCount: room.publicActions.length,
+      }));
+  }
+
+  getAdminRoom(rawCode: string): AdminRoomDetail {
+    const room = this.getRoom(rawCode);
+    const snapshot = this.buildSnapshot(room);
+    return {
+      code: room.code,
+      revision: room.revision,
+      phase: room.phase,
+      players: [...room.players]
+        .sort((left, right) => left.seat - right.seat)
+        .map((player) => ({
+          name: player.name,
+          seat: player.seat,
+          ready: player.ready,
+          connected: player.connected,
+          isHost: player.id === room.hostPlayerId,
+          isTestPlayer: player.isTestPlayer,
+          autoManaged: player.autoManaged,
+          offlineSeconds: player.disconnectedAt === undefined ? undefined : Math.max(0, Math.floor((this.now() - player.disconnectedAt) / 1_000)),
+        })),
+      scoreTotals: [...room.scoreTotals],
+      match: snapshot.match,
+      publicActions: snapshot.publicActions,
+      game: snapshot.game
+        ? {
+            modelVersion: snapshot.game.modelVersion,
+            roundNumber: snapshot.game.roundNumber,
+            dealerSeat: snapshot.game.dealerSeat,
+            turnSeat: snapshot.game.turnSeat,
+            stage: snapshot.game.stage,
+            wallRemaining: snapshot.game.wallRemaining,
+            handTileCounts: [...snapshot.game.handTileCounts],
+            actionDeadlineAt: snapshot.game.actionDeadlineAt,
+            actionTimeoutSeconds: snapshot.game.actionTimeoutSeconds,
+            latestDiscard: snapshot.game.latestDiscard,
+            discards: snapshot.game.discards,
+            melds: snapshot.game.melds,
+            scorePayments: snapshot.game.scorePayments,
+            scoreDeltas: snapshot.game.scoreDeltas,
+            reaction: snapshot.game.reaction,
+            roundResult: snapshot.game.roundResult,
+          }
+        : undefined,
+    };
   }
 
   private buildSnapshot(room: Room, viewer?: Player): RoomSnapshot {
