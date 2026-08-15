@@ -7,7 +7,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/server/src/index.js",
     "test": "pnpm run build && node --test dist/server/test/*.test.js",
-    "smoke": "node scripts/websocket-smoke.mjs"
+    "smoke": "node scripts/websocket-smoke.mjs",
+    "smoke:full-round": "node scripts/full-round-smoke.mjs"
   },
   "dependencies": {
     "ws": "^8.18.3"

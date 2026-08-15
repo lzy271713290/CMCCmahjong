@@ -150,6 +150,26 @@ webSockets.on("connection", (socket) => {
           bindSession(socket, session, connectionId, "room_reconnected");
           break;
         }
+        case "leave_room": {
+          const session = requireSession(socket);
+          const result = manager.leaveRoom(session.roomCode, session.playerToken);
+          sessionsBySocket.delete(socket);
+          if (socketsByToken.get(session.playerToken) === socket) socketsByToken.delete(session.playerToken);
+          send(socket, { type: "left_room" });
+          if (!result.deleted) broadcast(session.roomCode);
+          logInfo("room_left", {
+            connectionId,
+            roomCode: session.roomCode,
+            playerId: shortId(result.playerId),
+            seat: result.seat,
+            wasHost: result.wasHost,
+            hostTransferred: Boolean(result.nextHostPlayerId),
+            roomDeleted: result.deleted,
+            playerCount: result.snapshot?.players.length ?? 0,
+            revision: result.snapshot?.revision,
+          });
+          break;
+        }
         case "set_ready": {
           const session = requireSession(socket);
           const snapshot = manager.setReady(session.roomCode, session.playerToken, Boolean(message.ready));
@@ -162,6 +182,19 @@ webSockets.on("connection", (socket) => {
           const snapshot = manager.fillWithTestPlayers(session.roomCode, session.playerToken);
           broadcast(session.roomCode);
           logInfo("test_players_filled", { connectionId, roomCode: session.roomCode, playerCount: snapshot.players.length, revision: snapshot.revision });
+          break;
+        }
+        case "remove_test_players": {
+          const session = requireSession(socket);
+          const { snapshot, removedCount } = manager.removeTestPlayers(session.roomCode, session.playerToken);
+          broadcast(session.roomCode);
+          logInfo("test_players_removed", {
+            connectionId,
+            roomCode: session.roomCode,
+            removedCount,
+            playerCount: snapshot.players.length,
+            revision: snapshot.revision,
+          });
           break;
         }
         case "start_game": {

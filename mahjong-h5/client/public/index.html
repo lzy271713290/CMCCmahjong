@@ -23,6 +23,7 @@
         <div class="divider"><span>或加入朋友的房间</span></div>
         <label>六位房间号<input id="room-code" inputmode="numeric" maxlength="6" placeholder="000000" /></label>
         <button id="join">加入房间</button>
+        <button id="rules-open" class="rules-button" type="button">查看玩法与操作说明</button>
       </section>
 
       <section id="room" class="card hidden">
@@ -34,7 +35,8 @@
         <button id="ready" class="primary">准备</button>
         <button id="fill-test" class="test-button">一键补齐测试玩家</button>
         <button id="start" class="primary hidden">开始游戏</button>
-        <p class="hint">单人联调可补齐三名测试玩家；开局后测试玩家会自动摸牌和出牌。</p>
+        <button id="leave-room" class="leave-button">退出房间</button>
+        <p class="hint">单人联调可补齐或移除测试玩家；真人全部在线并准备后才能开局。</p>
       </section>
 
       <p id="notice" class="notice" aria-live="polite"></p>
@@ -47,6 +49,7 @@
           <div id="round-label" class="round-label">第1局</div>
           <div class="hud-actions">
             <button id="share-room" class="hud-button" type="button" aria-label="邀请好友" title="邀请好友">邀</button>
+            <button id="rules-game" class="hud-button" type="button" aria-label="查看规则" title="查看规则">规</button>
             <button id="sound-toggle" class="hud-button" type="button" aria-label="关闭音效" title="音效">声</button>
             <button id="fullscreen-toggle" class="hud-button" type="button" aria-label="全屏横屏" title="全屏横屏">全</button>
             <span id="game-connection" class="status">连接中</span>
@@ -86,6 +89,21 @@
         <div class="rotate-tip">请横屏体验牌桌</div>
       </div>
     </section>
+
+    <div id="rules-overlay" class="rules-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="rules-title">
+      <article class="rules-card">
+        <header><div><span class="eyebrow">开局前看一分钟</span><h2 id="rules-title">玩法与操作说明</h2></div><button id="rules-close-x" class="rules-close-x" type="button" aria-label="关闭">×</button></header>
+        <div class="rules-grid">
+          <section><h3>怎么开始</h3><p>房主选择 8 局或 16 局并分享房间链接。四名真人都在线且准备后，由房主开局。</p></section>
+          <section><h3>轮到你时</h3><p>点击手牌出牌；可胡、杠或执行特殊杠时，牌桌会显示操作按钮。吃、碰、杠、胡出现后可选择或点“过”。</p></section>
+          <section><h3>响应顺序</h3><p>胡优先于杠、碰、吃；只有弃牌者的下家能吃。多人同时可胡时按当前规则结算。</p></section>
+          <section><h3>本项目规则</h3><p>支持普通胡、七对、自摸、点炮、明杠、暗杠、加杠、抢杠胡，以及中发白和幺鸡特殊杠、涨毛。</p></section>
+          <section><h3>结算与断线</h3><p>每局结束显示输赢与总分；所有人可在局末同意提前结算。短暂断网会自动重连并恢复原座位和手牌。</p></section>
+          <section><h3>房间管理</h3><p>等待时可退出，房主退出会自动转给下一位真人；误加测试玩家可一键移除。牌局进行中请勿主动退出。</p></section>
+        </div>
+        <button id="rules-close" class="primary" type="button">知道了，开始打牌</button>
+      </article>
+    </div>
 
     <script type="module" src="/app.js"></script>
   </body>

@@ -200,7 +200,7 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "playable-ux-v9" ||
+  result.modelVersion !== "friend-ready-v10" ||
   result.matchRounds !== 16 ||
   !result.earlyNextRoundRejected ||
   !result.earlySettlementDuringRoundRejected ||
@@ -223,7 +223,7 @@ if (
   result.tableAsset.bytes < 100_000 ||
   result.health.status !== 200 ||
   !result.health.ok ||
-  result.health.modelVersion !== "playable-ux-v9" ||
+  result.health.modelVersion !== "friend-ready-v10" ||
   result.health.instanceIdLength !== 8
 ) {
   process.exitCode = 1;

@@ -18,6 +18,7 @@ const joinButton = required<HTMLButtonElement>("join");
 const readyButton = required<HTMLButtonElement>("ready");
 const fillTestButton = required<HTMLButtonElement>("fill-test");
 const startButton = required<HTMLButtonElement>("start");
+const leaveRoomButton = required<HTMLButtonElement>("leave-room");
 const copyButton = required<HTMLButtonElement>("copy");
 const currentCode = required<HTMLElement>("current-code");
 const matchModeLabel = required<HTMLElement>("match-mode-label");
@@ -43,6 +44,11 @@ const actionBanner = required<HTMLElement>("action-banner");
 const networkOverlay = required<HTMLElement>("network-overlay");
 const networkDetail = required<HTMLElement>("network-detail");
 const reconnectNowButton = required<HTMLButtonElement>("reconnect-now");
+const rulesOpenButton = required<HTMLButtonElement>("rules-open");
+const rulesGameButton = required<HTMLButtonElement>("rules-game");
+const rulesOverlay = required<HTMLElement>("rules-overlay");
+const rulesCloseButton = required<HTMLButtonElement>("rules-close");
+const rulesCloseXButton = required<HTMLButtonElement>("rules-close-x");
 
 let socket: WebSocket | undefined;
 let saved = loadSession();
@@ -162,6 +168,14 @@ function handleMessage(message: ServerMessage): void {
     reconnectFeedbackPending = false;
     updateNetworkOverlay(false);
     showNotice(message.message);
+  } else if (message.type === "left_room") {
+    clearPendingRequest();
+    localStorage.removeItem("mahjong-session");
+    saved = undefined;
+    snapshot = undefined;
+    history.replaceState({}, "", "/");
+    showLobby();
+    showNotice("已退出房间");
   } else if (message.type === "pong") {
     setConnection("已连接", true);
   }
@@ -204,8 +218,14 @@ function renderWaitingRoom(next: RoomSnapshot, me: PlayerView | undefined): void
     seats.append(card);
   }
   readyButton.textContent = me?.ready ? "取消准备" : "准备";
-  const canStart = Boolean(me?.isHost && next.players.length === 4 && next.players.every((player) => player.ready));
-  fillTestButton.classList.toggle("hidden", !me?.isHost || next.players.length >= 4);
+  const testPlayerCount = next.players.filter((player) => player.isTestPlayer).length;
+  const canStart = Boolean(
+    me?.isHost
+    && next.players.length === 4
+    && next.players.every((player) => player.ready && (player.connected || player.isTestPlayer)),
+  );
+  fillTestButton.textContent = testPlayerCount > 0 ? `移除测试玩家（${testPlayerCount}）` : "一键补齐测试玩家";
+  fillTestButton.classList.toggle("hidden", !me?.isHost || (testPlayerCount === 0 && next.players.length >= 4));
   startButton.classList.toggle("hidden", !canStart);
 }
 
@@ -827,13 +847,7 @@ async function copyText(text: string): Promise<void> {
 }
 
 function returnToLobby(): void {
-  localStorage.removeItem("mahjong-session");
-  saved = undefined;
-  snapshot = undefined;
-  history.replaceState({}, "", "/");
-  forceReconnect();
-  showLobby();
-  showNotice("已返回大厅，可以创建新房间");
+  if (send({ type: "leave_room" })) showNotice("正在退出房间");
 }
 
 async function toggleFullscreen(): Promise<void> {
@@ -877,6 +891,11 @@ function showNotice(text: string): void {
   gameNotice.textContent = text;
 }
 
+function setRulesVisible(visible: boolean): void {
+  rulesOverlay.classList.toggle("hidden", !visible);
+  if (visible) rulesCloseButton.focus();
+}
+
 createButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   send({ type: "create_room", name: nameInput.value, totalRounds: Number(matchRounds.value) as 8 | 16 });
@@ -890,7 +909,11 @@ readyButton.addEventListener("click", () => {
   const me = snapshot?.players.find((player) => player.id === saved?.playerId);
   send({ type: "set_ready", ready: !me?.ready });
 });
-fillTestButton.addEventListener("click", () => send({ type: "fill_test_players" }));
+fillTestButton.addEventListener("click", () => {
+  const hasTestPlayers = snapshot?.players.some((player) => player.isTestPlayer);
+  send({ type: hasTestPlayers ? "remove_test_players" : "fill_test_players" });
+});
+leaveRoomButton.addEventListener("click", returnToLobby);
 startButton.addEventListener("click", () => {
   ensureAudioContext();
   send({ type: "start_game" });
@@ -914,6 +937,16 @@ soundToggleButton.addEventListener("click", () => {
 });
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
 reconnectNowButton.addEventListener("click", forceReconnect);
+rulesOpenButton.addEventListener("click", () => setRulesVisible(true));
+rulesGameButton.addEventListener("click", () => setRulesVisible(true));
+rulesCloseButton.addEventListener("click", () => setRulesVisible(false));
+rulesCloseXButton.addEventListener("click", () => setRulesVisible(false));
+rulesOverlay.addEventListener("click", (event) => {
+  if (event.target === rulesOverlay) setRulesVisible(false);
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape") setRulesVisible(false);
+});
 window.addEventListener("online", () => {
   if (socket?.readyState !== WebSocket.OPEN) forceReconnect();
 });

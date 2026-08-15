@@ -940,3 +940,63 @@ test("每次涨毛独立开放抢杠窗口，被抢后不增加特殊杠牌张",
   assert.deepEqual(result.snapshot.game?.melds[0]?.tiles, ["red", "green", "white"]);
   assert.equal(result.snapshot.game?.wallRemaining, 83);
 });
+
+test("等待房间玩家可以退出并释放原座位", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("房主");
+  const second = rooms.joinRoom(host.roomCode, "玩家二");
+
+  const result = rooms.leaveRoom(host.roomCode, second.playerToken);
+
+  assert.equal(result.deleted, false);
+  assert.equal(result.snapshot?.players.length, 1);
+  assert.throws(
+    () => rooms.reconnect(host.roomCode, second.playerToken),
+    (error) => error instanceof RoomError && error.code === "TOKEN_INVALID",
+  );
+  const replacement = rooms.joinRoom(host.roomCode, "替补玩家");
+  assert.equal(replacement.snapshot.players.find((player) => player.id === replacement.playerId)?.seat, 1);
+});
+
+test("房主退出会转移房主且没有真人时删除房间", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("原房主");
+  const second = rooms.joinRoom(host.roomCode, "新房主");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+
+  const transferred = rooms.leaveRoom(host.roomCode, host.playerToken);
+
+  assert.equal(transferred.wasHost, true);
+  assert.equal(transferred.nextHostPlayerId, second.playerId);
+  assert.equal(transferred.snapshot?.players.find((player) => player.id === second.playerId)?.isHost, true);
+
+  const solo = rooms.createRoom("单人房主");
+  rooms.fillWithTestPlayers(solo.roomCode, solo.playerToken);
+  assert.equal(rooms.leaveRoom(solo.roomCode, solo.playerToken).deleted, true);
+  assert.throws(
+    () => rooms.snapshot(solo.roomCode),
+    (error) => error instanceof RoomError && error.code === "ROOM_NOT_FOUND",
+  );
+});
+
+test("房主可撤销测试玩家且离线真人不能开局", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("房主");
+  const second = rooms.joinRoom(host.roomCode, "玩家二");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+
+  const removed = rooms.removeTestPlayers(host.roomCode, host.playerToken);
+  assert.equal(removed.removedCount, 2);
+  assert.equal(removed.snapshot.players.length, 2);
+
+  const third = rooms.joinRoom(host.roomCode, "玩家三");
+  const fourth = rooms.joinRoom(host.roomCode, "玩家四");
+  for (const session of [host, second, third, fourth]) rooms.setReady(host.roomCode, session.playerToken, true);
+  rooms.disconnect(host.roomCode, fourth.playerToken);
+  assert.throws(
+    () => rooms.startGame(host.roomCode, host.playerToken),
+    (error) => error instanceof RoomError && error.code === "CONNECTED_PLAYERS_REQUIRED",
+  );
+  rooms.reconnect(host.roomCode, fourth.playerToken);
+  assert.equal(rooms.startGame(host.roomCode, host.playerToken).phase, "playing");
+});

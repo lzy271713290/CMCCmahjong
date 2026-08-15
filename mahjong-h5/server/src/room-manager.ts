@@ -115,6 +115,16 @@ export type EarlySettlementProgress = {
   };
 };
 
+export type LeaveRoomResult = {
+  roomCode: string;
+  playerId: string;
+  seat: number;
+  wasHost: boolean;
+  nextHostPlayerId?: string;
+  deleted: boolean;
+  snapshot?: RoomSnapshot;
+};
+
 type ReactionWindowDiagnostic = {
   discard: DiscardView;
   eligibleSeats: number[];
@@ -202,6 +212,36 @@ export class RoomManager {
     }
   }
 
+  leaveRoom(rawCode: string, playerToken: string): LeaveRoomResult {
+    const room = this.getRoom(rawCode);
+    if (room.phase !== "waiting" && !room.matchEndReason) throw new RoomError("GAME_STARTED", "牌局进行中不能退出座位，请等待重连");
+    const player = room.players.find((candidate) => candidate.token === playerToken);
+    if (!player || player.isTestPlayer) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    const wasHost = player.id === room.hostPlayerId;
+    room.players = room.players.filter((candidate) => candidate.id !== player.id);
+
+    let nextHostPlayerId: string | undefined;
+    if (wasHost) {
+      const nextHost = room.players.find((candidate) => !candidate.isTestPlayer);
+      if (!nextHost) {
+        this.rooms.delete(room.code);
+        return { roomCode: room.code, playerId: player.id, seat: player.seat, wasHost, deleted: true };
+      }
+      room.hostPlayerId = nextHost.id;
+      nextHostPlayerId = nextHost.id;
+    }
+    room.revision += 1;
+    return {
+      roomCode: room.code,
+      playerId: player.id,
+      seat: player.seat,
+      wasHost,
+      nextHostPlayerId,
+      deleted: false,
+      snapshot: this.snapshot(room.code),
+    };
+  }
+
   setReady(rawCode: string, playerToken: string, ready: boolean): RoomSnapshot {
     const room = this.getRoom(rawCode);
     if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始");
@@ -234,6 +274,19 @@ export class RoomManager {
     return this.snapshot(room.code);
   }
 
+  removeTestPlayers(rawCode: string, playerToken: string): { snapshot: RoomSnapshot; removedCount: number } {
+    const room = this.getRoom(rawCode);
+    if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始");
+    const operator = room.players.find((candidate) => candidate.token === playerToken);
+    if (!operator) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    if (operator.id !== room.hostPlayerId) throw new RoomError("HOST_REQUIRED", "只有房主可以移除测试玩家");
+    const previousCount = room.players.length;
+    room.players = room.players.filter((player) => !player.isTestPlayer);
+    const removedCount = previousCount - room.players.length;
+    if (removedCount > 0) room.revision += 1;
+    return { snapshot: this.snapshot(room.code), removedCount };
+  }
+
   startGame(rawCode: string, playerToken: string): RoomSnapshot {
     const room = this.getRoom(rawCode);
     const operator = room.players.find((candidate) => candidate.token === playerToken);
@@ -242,6 +295,9 @@ export class RoomManager {
     if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始");
     if (room.players.length !== 4) throw new RoomError("PLAYERS_REQUIRED", "需要四名玩家才能开始");
     if (!room.players.every((player) => player.ready)) throw new RoomError("READY_REQUIRED", "需要所有玩家准备后才能开始");
+    if (!room.players.every((player) => player.connected || player.isTestPlayer)) {
+      throw new RoomError("CONNECTED_PLAYERS_REQUIRED", "有玩家暂时离线，请等待其重连后再开始");
+    }
     const hasTestPlayers = room.players.some((player) => player.isTestPlayer);
     const dealerCandidates = hasTestPlayers ? room.players.filter((player) => !player.isTestPlayer) : room.players;
     const dealerSeat = dealerCandidates[this.gameRandomIndex(dealerCandidates.length)]!.seat;

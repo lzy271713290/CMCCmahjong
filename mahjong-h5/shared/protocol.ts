@@ -130,6 +130,8 @@ export type ClientMessage =
   | { type: "reconnect"; roomCode: string; playerToken: string }
   | { type: "set_ready"; ready: boolean }
   | { type: "fill_test_players" }
+  | { type: "remove_test_players" }
+  | { type: "leave_room" }
   | { type: "start_game" }
   | { type: "start_next_round" }
   | { type: "request_early_settlement" }
@@ -148,5 +150,6 @@ export type ServerMessage =
       snapshot: RoomSnapshot;
     }
   | { type: "snapshot"; snapshot: RoomSnapshot }
+  | { type: "left_room" }
   | { type: "error"; code: string; message: string }
   | { type: "pong" };
