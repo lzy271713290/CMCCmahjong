@@ -1,9 +1,17 @@
 import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import { PUBLIC_REPLAY_FORMAT, parsePublicReplay, type PublicReplayPlayer, type PublicReplayRecord } from "./public-replay.js";
 
 type SavedSession = { roomCode: string; playerId: string; playerToken: string };
 type TablePosition = "bottom" | "right" | "top" | "left";
 type FeedbackKind = "discard" | "turn" | "meld" | "hu" | "round" | "vote" | "system";
 type Feedback = { text: string; kind: FeedbackKind };
+type HistorySource = {
+  roomCode: string;
+  modelVersion?: string;
+  players: PublicReplayPlayer[];
+  scoreTotals: number[];
+  publicActions: PublicActionView[];
+};
 
 const positions: TablePosition[] = ["bottom", "right", "top", "left"];
 const winds = ["东", "南", "西", "北"];
@@ -49,8 +57,19 @@ const rulesGameButton = required<HTMLButtonElement>("rules-game");
 const rulesOverlay = required<HTMLElement>("rules-overlay");
 const rulesCloseButton = required<HTMLButtonElement>("rules-close");
 const rulesCloseXButton = required<HTMLButtonElement>("rules-close-x");
+const historyImportButton = required<HTMLButtonElement>("history-import");
+const historyFileInput = required<HTMLInputElement>("history-file");
 const historyGameButton = required<HTMLButtonElement>("history-game");
 const historyOverlay = required<HTMLElement>("history-overlay");
+const historyEyebrow = required<HTMLElement>("history-eyebrow");
+const historyTitle = required<HTMLElement>("history-title");
+const historyMeta = required<HTMLElement>("history-meta");
+const historyRoundSelect = required<HTMLSelectElement>("history-round");
+const historyFocus = required<HTMLElement>("history-focus");
+const historyProgress = required<HTMLInputElement>("history-progress");
+const historyPrevButton = required<HTMLButtonElement>("history-prev");
+const historyPlayButton = required<HTMLButtonElement>("history-play");
+const historyNextButton = required<HTMLButtonElement>("history-next");
 const historyList = required<HTMLOListElement>("history-list");
 const historyExportButton = required<HTMLButtonElement>("history-export");
 const historyCloseButton = required<HTMLButtonElement>("history-close");
@@ -70,6 +89,10 @@ let soundEnabled = localStorage.getItem("mahjong-sound") !== "off";
 let audioContext: AudioContext | undefined;
 let lastServerMessageAt = Date.now();
 let reconnectFeedbackPending = false;
+let importedReplay: PublicReplayRecord | undefined;
+let historySource: HistorySource | undefined;
+let historyCursor = 0;
+let historyPlaybackTimer: number | undefined;
 
 function required<T extends HTMLElement>(id: string): T {
   const element = document.getElementById(id);
@@ -246,7 +269,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
   renderOperations(game.availableOperations ?? [], game.availableTurnOperations ?? []);
   renderScoreSummary(next);
-  renderActionHistory(next);
+  refreshLiveHistory(next);
 
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
   if (next.match.status === "completed") {
@@ -903,16 +926,63 @@ function setRulesVisible(visible: boolean): void {
   if (visible) rulesCloseButton.focus();
 }
 
-function setHistoryVisible(visible: boolean): void {
-  historyOverlay.classList.toggle("hidden", !visible);
-  if (visible) {
-    if (snapshot) renderActionHistory(snapshot);
-    historyCloseButton.focus();
-  }
+function stopHistoryPlayback(): void {
+  window.clearInterval(historyPlaybackTimer);
+  historyPlaybackTimer = undefined;
+  historyPlayButton.textContent = "播放";
 }
 
-function describePublicAction(action: PublicActionView, roomSnapshot: RoomSnapshot): string {
-  const seatName = (seat: number | undefined) => seat === undefined ? "玩家" : playerName(roomSnapshot, seat);
+function setHistoryVisible(visible: boolean): void {
+  historyOverlay.classList.toggle("hidden", !visible);
+  if (!visible) stopHistoryPlayback();
+  else historyCloseButton.focus();
+}
+
+function sourceFromSnapshot(roomSnapshot: RoomSnapshot): HistorySource {
+  return {
+    roomCode: roomSnapshot.roomCode,
+    modelVersion: roomSnapshot.game?.modelVersion,
+    players: roomSnapshot.players,
+    scoreTotals: roomSnapshot.scoreTotals,
+    publicActions: roomSnapshot.publicActions,
+  };
+}
+
+function setHistorySource(source: HistorySource, imported: boolean): void {
+  stopHistoryPlayback();
+  historySource = source;
+  historyRoundSelect.replaceChildren(new Option("全部", "all"));
+  const rounds = [...new Set(source.publicActions.map((action) => action.roundNumber).filter((round): round is number => round !== undefined))].sort((a, b) => a - b);
+  for (const round of rounds) historyRoundSelect.add(new Option(`第${round}局`, String(round)));
+  historyCursor = imported ? 0 : Math.max(0, source.publicActions.length - 1);
+  historyEyebrow.textContent = imported ? "本地只读 · 已校验隐私" : "服务端权威记录";
+  historyTitle.textContent = imported ? "公共牌局记录回放" : "牌局公开时间线";
+  historyExportButton.classList.toggle("hidden", imported);
+  historyCloseButton.textContent = imported ? "关闭回放" : "返回牌桌";
+  renderActionHistory();
+}
+
+function openLiveHistory(): void {
+  if (!snapshot) return;
+  importedReplay = undefined;
+  setHistorySource(sourceFromSnapshot(snapshot), false);
+  setHistoryVisible(true);
+}
+
+function refreshLiveHistory(roomSnapshot: RoomSnapshot): void {
+  if (historyOverlay.classList.contains("hidden") || importedReplay) return;
+  const wasLatest = historyCursor >= filteredHistoryActions().length - 1;
+  historySource = sourceFromSnapshot(roomSnapshot);
+  if (wasLatest) historyCursor = Math.max(0, filteredHistoryActions().length - 1);
+  renderActionHistory();
+}
+
+function historyPlayerName(source: HistorySource, seat: number): string {
+  return source.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`;
+}
+
+function describePublicAction(action: PublicActionView, source: HistorySource): string {
+  const seatName = (seat: number | undefined) => seat === undefined ? "玩家" : historyPlayerName(source, seat);
   const winners = action.seats?.map((seat) => seatName(seat)).join("、") ?? "";
   const tile = action.tile ? ` ${tileLabel(action.tile)}` : "";
   switch (action.kind) {
@@ -937,31 +1007,105 @@ function describePublicAction(action: PublicActionView, roomSnapshot: RoomSnapsh
   }
 }
 
-function renderActionHistory(roomSnapshot: RoomSnapshot): void {
+function filteredHistoryActions(): PublicActionView[] {
+  const actions = historySource?.publicActions ?? [];
+  if (historyRoundSelect.value === "all") return actions;
+  const round = Number(historyRoundSelect.value);
+  return actions.filter((action) => action.roundNumber === round);
+}
+
+function setHistoryCursor(next: number): void {
+  const actions = filteredHistoryActions();
+  historyCursor = actions.length === 0 ? 0 : Math.max(0, Math.min(next, actions.length - 1));
+  renderActionHistory();
+}
+
+function renderActionHistory(): void {
   historyList.replaceChildren();
-  const actions = roomSnapshot.publicActions.slice(-60).reverse();
+  const source = historySource;
+  const actions = filteredHistoryActions();
+  historyCursor = actions.length === 0 ? 0 : Math.min(historyCursor, actions.length - 1);
+  historyProgress.max = String(Math.max(0, actions.length - 1));
+  historyProgress.value = String(historyCursor);
+  historyProgress.disabled = actions.length < 2;
+  historyPrevButton.disabled = actions.length === 0 || historyCursor === 0;
+  historyNextButton.disabled = actions.length === 0 || historyCursor === actions.length - 1;
+  historyPlayButton.disabled = actions.length < 2;
+  historyMeta.textContent = source
+    ? `房间 ${source.roomCode} · ${source.modelVersion ?? "未知版本"} · ${actions.length}条${historyRoundSelect.value === "all" ? "" : "本局"}动作`
+    : "等待公开动作";
   if (actions.length === 0) {
     const empty = document.createElement("li");
     empty.className = "empty-history";
-    empty.textContent = "开局后的公开操作会显示在这里";
+    empty.textContent = historyRoundSelect.value === "all" ? "开局后的公开操作会显示在这里" : "这一局没有公开动作";
     historyList.append(empty);
+    historyFocus.textContent = "选择一条动作开始回看";
     return;
   }
-  for (const action of actions) {
+  const current = actions[historyCursor]!;
+  historyFocus.textContent = `第 ${historyCursor + 1}/${actions.length} 步 · ${describePublicAction(current, source!)}`;
+  const first = Math.max(0, historyCursor - 5);
+  const last = Math.min(actions.length, historyCursor + 6);
+  for (let index = last - 1; index >= first; index -= 1) {
+    const action = actions[index]!;
     const item = document.createElement("li");
+    item.classList.toggle("current", index === historyCursor);
+    item.tabIndex = 0;
     const sequence = document.createElement("b");
     sequence.textContent = `#${action.sequence}`;
     const description = document.createElement("span");
-    description.textContent = describePublicAction(action, roomSnapshot);
+    description.textContent = describePublicAction(action, source!);
     item.append(sequence, description);
+    item.addEventListener("click", () => setHistoryCursor(index));
+    item.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") setHistoryCursor(index);
+    });
     historyList.append(item);
+  }
+}
+
+function toggleHistoryPlayback(): void {
+  if (historyPlaybackTimer !== undefined) {
+    stopHistoryPlayback();
+    return;
+  }
+  const actions = filteredHistoryActions();
+  if (actions.length < 2) return;
+  if (historyCursor >= actions.length - 1) historyCursor = 0;
+  historyPlayButton.textContent = "暂停";
+  renderActionHistory();
+  historyPlaybackTimer = window.setInterval(() => {
+    const latestActions = filteredHistoryActions();
+    if (historyCursor >= latestActions.length - 1) {
+      stopHistoryPlayback();
+      return;
+    }
+    setHistoryCursor(historyCursor + 1);
+  }, 850);
+}
+
+async function importPublicHistory(file: File): Promise<void> {
+  try {
+    if (file.size > 1_000_000) throw new Error("记录文件不能超过1MB");
+    const replay = parsePublicReplay(await file.text());
+    importedReplay = replay;
+    setHistorySource(replay, true);
+    setHistoryVisible(true);
+    console.info(JSON.stringify({ event: "public_replay_imported", format: replay.format, roomCode: replay.roomCode, modelVersion: replay.modelVersion, publicActionCount: replay.publicActions.length, privacy: "public_only" }));
+    showNotice(`已导入房间 ${replay.roomCode} 的 ${replay.publicActions.length} 条公共动作`);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "未知错误";
+    console.warn(JSON.stringify({ event: "public_replay_import_rejected", reason: message }));
+    showNotice(`记录导入失败：${message}`);
+  } finally {
+    historyFileInput.value = "";
   }
 }
 
 async function exportPublicHistory(): Promise<void> {
   if (!snapshot) return;
   const record = {
-    format: "cmccmahjong-public-replay-v1",
+    format: PUBLIC_REPLAY_FORMAT,
     exportedAt: new Date().toISOString(),
     roomCode: snapshot.roomCode,
     modelVersion: snapshot.game?.modelVersion,
@@ -1037,10 +1181,32 @@ rulesCloseXButton.addEventListener("click", () => setRulesVisible(false));
 rulesOverlay.addEventListener("click", (event) => {
   if (event.target === rulesOverlay) setRulesVisible(false);
 });
-historyGameButton.addEventListener("click", () => setHistoryVisible(true));
+historyImportButton.addEventListener("click", () => historyFileInput.click());
+historyFileInput.addEventListener("change", () => {
+  const file = historyFileInput.files?.[0];
+  if (file) void importPublicHistory(file);
+});
+historyGameButton.addEventListener("click", openLiveHistory);
 historyCloseButton.addEventListener("click", () => setHistoryVisible(false));
 historyCloseXButton.addEventListener("click", () => setHistoryVisible(false));
 historyExportButton.addEventListener("click", exportPublicHistory);
+historyRoundSelect.addEventListener("change", () => {
+  stopHistoryPlayback();
+  setHistoryCursor(0);
+});
+historyProgress.addEventListener("input", () => {
+  stopHistoryPlayback();
+  setHistoryCursor(Number(historyProgress.value));
+});
+historyPrevButton.addEventListener("click", () => {
+  stopHistoryPlayback();
+  setHistoryCursor(historyCursor - 1);
+});
+historyPlayButton.addEventListener("click", toggleHistoryPlayback);
+historyNextButton.addEventListener("click", () => {
+  stopHistoryPlayback();
+  setHistoryCursor(historyCursor + 1);
+});
 historyOverlay.addEventListener("click", (event) => {
   if (event.target === historyOverlay) setHistoryVisible(false);
 });

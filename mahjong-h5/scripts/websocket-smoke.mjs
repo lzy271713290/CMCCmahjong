@@ -2,6 +2,7 @@ import WebSocket from "ws";
 import { findDiscardReactionOptions } from "../dist/server/src/game-model.js";
 
 const serverUrl = process.argv[2] ?? "ws://127.0.0.1:3000/ws";
+const expectedVersion = process.argv[3] ?? "replay-viewer-v12";
 const httpBaseUrl = serverUrl.replace(/^ws/, "http").replace(/\/ws$/, "");
 
 function open() {
@@ -150,11 +151,13 @@ const playingRestoredSocket = await open();
 const playingRestoredWait = next(playingRestoredSocket, "session");
 playingRestoredSocket.send(JSON.stringify({ type: "reconnect", roomCode: created.roomCode, playerToken: joined.playerToken }));
 const playingRestored = await playingRestoredWait;
-const [tileAssetResponse, tableAssetResponse] = await Promise.all([
+const [tileAssetResponse, tableAssetResponse, replayModuleResponse] = await Promise.all([
   fetch(`${httpBaseUrl}/assets/babykylin/MJ/bottom/Z_bottom.png`),
   fetch(`${httpBaseUrl}/assets/babykylin/table/mahjong_table.jpg`),
+  fetch(`${httpBaseUrl}/public-replay.js`),
 ]);
 const [tileAsset, tableAsset] = await Promise.all([tileAssetResponse.arrayBuffer(), tableAssetResponse.arrayBuffer()]);
+const replayModule = await replayModuleResponse.text();
 const healthResponse = await fetch(`${httpBaseUrl}/healthz`);
 const health = await healthResponse.json();
 
@@ -187,6 +190,7 @@ const result = {
   playingHandRestored: JSON.stringify(playingRestored.snapshot.game?.selfHand) === JSON.stringify(originalPlayingHand),
   tileAsset: { contentType: tileAssetResponse.headers.get("content-type"), bytes: tileAsset.byteLength },
   tableAsset: { contentType: tableAssetResponse.headers.get("content-type"), bytes: tableAsset.byteLength },
+  replayModule: { status: replayModuleResponse.status, contentType: replayModuleResponse.headers.get("content-type"), parserExported: replayModule.includes("export function parsePublicReplay") },
   health: { status: healthResponse.status, ok: health.ok, modelVersion: health.modelVersion, instanceIdLength: health.instanceId?.length },
 };
 console.log(JSON.stringify(result));
@@ -202,7 +206,7 @@ if (
   !result.disconnectObserved ||
   !result.originalSeatRestored ||
   result.gamePhase !== "playing" ||
-  result.modelVersion !== "replay-ready-v11" ||
+  result.modelVersion !== expectedVersion ||
   result.matchRounds !== 16 ||
   !result.earlyNextRoundRejected ||
   !result.earlySettlementDuringRoundRejected ||
@@ -225,9 +229,12 @@ if (
   result.tileAsset.bytes < 100_000 ||
   result.tableAsset.contentType !== "image/jpeg" ||
   result.tableAsset.bytes < 100_000 ||
+  result.replayModule.status !== 200 ||
+  !result.replayModule.contentType?.includes("javascript") ||
+  !result.replayModule.parserExported ||
   result.health.status !== 200 ||
   !result.health.ok ||
-  result.health.modelVersion !== "replay-ready-v11" ||
+  result.health.modelVersion !== expectedVersion ||
   result.health.instanceIdLength !== 8
 ) {
   process.exitCode = 1;

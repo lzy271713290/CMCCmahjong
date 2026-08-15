@@ -1,0 +1,22 @@
+{
+  "format": "cmccmahjong-public-replay-v1",
+  "exportedAt": "2026-08-15T08:00:00.000Z",
+  "roomCode": "123456",
+  "modelVersion": "replay-viewer-v12",
+  "players": [
+    { "name": "东家", "seat": 0, "isTestPlayer": false },
+    { "name": "南家", "seat": 1, "isTestPlayer": false },
+    { "name": "西家", "seat": 2, "isTestPlayer": false },
+    { "name": "北家", "seat": 3, "isTestPlayer": false }
+  ],
+  "scoreTotals": [3, -1, -1, -1],
+  "publicActions": [
+    { "sequence": 1, "kind": "round_started", "roundNumber": 1, "seat": 0 },
+    { "sequence": 2, "kind": "discard", "roundNumber": 1, "seat": 0, "tile": "wan-1" },
+    { "sequence": 3, "kind": "peng", "roundNumber": 1, "seat": 1, "fromSeat": 0, "tile": "wan-1" },
+    { "sequence": 4, "kind": "round_ended", "roundNumber": 1, "seats": [1] },
+    { "sequence": 5, "kind": "round_started", "roundNumber": 2, "seat": 1 },
+    { "sequence": 6, "kind": "player_disconnected", "roundNumber": 2, "seat": 2 },
+    { "sequence": 7, "kind": "player_reconnected", "roundNumber": 2, "seat": 2 }
+  ]
+}

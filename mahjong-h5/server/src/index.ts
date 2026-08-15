@@ -35,6 +35,7 @@ const server = createServer((request, response) => {
   }
   let filePath: string | undefined;
   if (pathname === "/app.js") filePath = join(projectRoot, "dist/client/src/app.js");
+  else if (pathname === "/public-replay.js") filePath = join(projectRoot, "dist/client/src/public-replay.js");
   else if (pathname === "/styles.css") filePath = join(projectRoot, "client/public/styles.css");
   else if (pathname === "/" || pathname === "/index.html") filePath = join(projectRoot, "client/public/index.html");
   else if (pathname.startsWith("/assets/")) {
