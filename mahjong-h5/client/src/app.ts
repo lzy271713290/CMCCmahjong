@@ -1,4 +1,4 @@
-import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ScoreFactor, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import { MahjongAudioManager, type ActionVoice, type AudioMonitorEvent, type EffectSound, type VoiceGender } from "./audio-manager.js";
 import { PUBLIC_REPLAY_FORMAT, parsePublicReplay, type PublicReplayPlayer, type PublicReplayRecord } from "./public-replay.js";
 
@@ -570,7 +570,8 @@ function renderScoreSummary(next: RoomSnapshot): void {
       .map((payment) => {
         const from = next.players.find((player) => player.seat === payment.fromSeat)?.name ?? `${payment.fromSeat + 1}号位`;
         const to = next.players.find((player) => player.seat === payment.toSeat)?.name ?? `${payment.toSeat + 1}号位`;
-        return `${from}→${to} ${payment.amount}分`;
+        const formula = scoreFactorFormula(payment.factors);
+        return `${from}→${to} ${payment.amount}分${formula ? `（${formula}）` : ""}`;
       })
       .join(" · ");
     paymentDetails.append(paymentSummary, detail);
@@ -1068,6 +1069,26 @@ function showNotice(text: string): void {
   gameNotice.textContent = text;
 }
 
+const scoreFactorLabels: Record<ScoreFactor, string> = {
+  base: "底分2",
+  self_draw: "自摸×2",
+  discard: "点炮×2",
+  dealer: "庄家×2",
+  closed_winner: "赢家闭门×2",
+  closed_payer: "付家闭门×2",
+  pengpeng_hu: "碰碰胡×2",
+  seven_pairs: "七小对×2",
+  sanbu_lao: "三不烙×2",
+  kong: "明/加/特殊杠2分",
+  angang: "暗杠4分",
+  zhangmao: "涨毛1分",
+};
+
+function scoreFactorFormula(factors: ScoreFactor[] | undefined): string {
+  if (!factors?.length) return "";
+  return factors.map((factor) => scoreFactorLabels[factor]).join(" × ");
+}
+
 function setRulesVisible(visible: boolean): void {
   rulesOverlay.classList.toggle("hidden", !visible);
   if (visible) rulesCloseButton.focus();
@@ -1436,6 +1457,20 @@ function syncAudioSettingsUI(): void {
   soundToggleButton.textContent = enabled ? "声" : "静";
   soundToggleButton.setAttribute("aria-label", enabled ? "声音设置，当前已开启" : "声音设置，当前已静音");
 }
+
+const rotateTip = document.querySelector<HTMLElement>(".rotate-tip");
+let rotateTipTimer: number | undefined;
+function refreshRotateTip(): void {
+  window.clearTimeout(rotateTipTimer);
+  const portraitNarrow = window.matchMedia("(orientation: portrait) and (max-width: 700px)").matches;
+  rotateTip?.classList.toggle("faded", !portraitNarrow);
+  if (portraitNarrow) {
+    rotateTipTimer = window.setTimeout(() => rotateTip?.classList.add("faded"), 3000);
+  }
+}
+window.addEventListener("resize", refreshRotateTip);
+window.addEventListener("orientationchange", refreshRotateTip);
+refreshRotateTip();
 
 syncAudioSettingsUI();
 const savedNickname = localStorage.getItem("mahjong-nickname");

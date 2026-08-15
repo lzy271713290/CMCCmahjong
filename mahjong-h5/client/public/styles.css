@@ -268,7 +268,8 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
 .seat-left .meld-rack { top: 82px; left: 44px; flex-direction: column; }
 .seat-right .meld-rack { top: 82px; right: 44px; flex-direction: column; }
 .game-notice { position: absolute; z-index: 35; right: 0; bottom: 20%; left: 0; margin: 0; color: #ffe7a5; text-align: center; text-shadow: 0 2px 5px #002b25; font-size: 12px; pointer-events: none; }
-.rotate-tip { display: none; }
+.rotate-tip { display: none; transition: opacity .35s ease, visibility .35s ease; }
+.rotate-tip.faded { opacity: 0; visibility: hidden; }
 
 @keyframes active-player { 50% { transform: translateY(-2px); } }
 @keyframes action-banner-in { from { opacity: 0; transform: translate(-50%,-42%) scale(.84); } to { opacity: 1; transform: translate(-50%,-50%) scale(1); } }

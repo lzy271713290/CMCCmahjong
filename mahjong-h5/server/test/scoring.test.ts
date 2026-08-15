@@ -26,9 +26,9 @@ test("庄家闭门点炮胡按付款者分别叠加倍数", () => {
     meldsBySeat: emptyMelds(),
   });
   assert.deepEqual(result.payments, [
-    { fromSeat: 0, toSeat: 1, amount: 32, reason: "discard_hu" },
-    { fromSeat: 2, toSeat: 1, amount: 16, reason: "discard_hu" },
-    { fromSeat: 3, toSeat: 1, amount: 16, reason: "discard_hu" },
+    { fromSeat: 0, toSeat: 1, amount: 32, reason: "discard_hu", factors: ["base", "discard", "dealer", "closed_winner", "closed_payer"] },
+    { fromSeat: 2, toSeat: 1, amount: 16, reason: "discard_hu", factors: ["base", "dealer", "closed_winner", "closed_payer"] },
+    { fromSeat: 3, toSeat: 1, amount: 16, reason: "discard_hu", factors: ["base", "dealer", "closed_winner", "closed_payer"] },
   ]);
   assert.deepEqual(calculateScoreDeltas(result.payments), [-32, 64, -16, -16]);
 });
@@ -79,5 +79,7 @@ test("普通杠、暗杠、特殊杠和涨毛使用独立固定杠分", () => {
   assert.deepEqual(calculateKongPayments(1, "special_gang").map((payment) => payment.amount), [2, 2, 2]);
   assert.deepEqual(calculateKongPayments(1, "an_gang").map((payment) => payment.amount), [4, 4, 4]);
   assert.deepEqual(calculateKongPayments(1, "zhangmao").map((payment) => payment.amount), [1, 1, 1]);
+  assert.deepEqual(calculateKongPayments(1, "an_gang").map((payment) => payment.factors), [["angang"], ["angang"], ["angang"]]);
+  assert.deepEqual(calculateKongPayments(1, "ming_gang").map((payment) => payment.factors), [["kong"], ["kong"], ["kong"]]);
   assert.deepEqual(calculateScoreDeltas(calculateKongPayments(1, "an_gang")), [-4, 12, -4, -4]);
 });

@@ -34,7 +34,20 @@ export type ScoreReason =
   | "jia_gang"
   | "special_gang"
   | "zhangmao";
-export type ScorePaymentView = { fromSeat: number; toSeat: number; amount: number; reason: ScoreReason };
+export type ScoreFactor =
+  | "base"
+  | "self_draw"
+  | "discard"
+  | "dealer"
+  | "closed_winner"
+  | "closed_payer"
+  | "pengpeng_hu"
+  | "seven_pairs"
+  | "sanbu_lao"
+  | "kong"
+  | "angang"
+  | "zhangmao";
+export type ScorePaymentView = { fromSeat: number; toSeat: number; amount: number; reason: ScoreReason; factors?: ScoreFactor[] };
 export type WinnerScoreView = {
   seat: number;
   isClosed: boolean;
