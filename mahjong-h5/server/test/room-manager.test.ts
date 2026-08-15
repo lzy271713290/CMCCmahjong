@@ -35,13 +35,51 @@ test("四名玩家可以加入并同步准备状态", () => {
   assert.equal(snapshot.players.find((player) => player.id === second.playerId)?.ready, true);
 });
 
-test("第五名玩家会收到房间已满", () => {
+test("第五名玩家自动转为观战者且不占座位", () => {
   const rooms = new RoomManager();
   const host = rooms.createRoom("一");
   rooms.joinRoom(host.roomCode, "二");
   rooms.joinRoom(host.roomCode, "三");
   rooms.joinRoom(host.roomCode, "四");
-  assert.throws(() => rooms.joinRoom(host.roomCode, "五"), (error) => error instanceof RoomError && error.code === "ROOM_FULL");
+  const spectator = rooms.joinRoom(host.roomCode, "五");
+  assert.equal(spectator.role, "spectator");
+  const snapshot = rooms.snapshot(host.roomCode);
+  assert.equal(snapshot.players.length, 4);
+  assert.equal(snapshot.spectators.length, 1);
+  assert.equal(snapshot.spectators[0]?.name, "五");
+});
+
+test("等待中观战者可申请上桌且房主可以安排上桌", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("房主");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+  const spectator = rooms.joinRoom(host.roomCode, "围观");
+  const requested = rooms.requestSeat(host.roomCode, spectator.playerToken);
+  assert.equal(requested.spectators[0]?.requestingSeat, true);
+  rooms.removeTestPlayers(host.roomCode, host.playerToken);
+  const promoted = rooms.promoteSpectator(host.roomCode, host.playerToken, spectator.playerId);
+  assert.equal(promoted.players.length, 2);
+  assert.equal(promoted.spectators.length, 0);
+  assert.equal(promoted.players.find((player) => player.id === spectator.playerId)?.seat, 1);
+});
+
+test("牌局进行中第五人可观战且拿不到任何手牌信息", () => {
+  const rooms = new RoomManager();
+  const host = rooms.createRoom("房主");
+  rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
+  rooms.setReady(host.roomCode, host.playerToken, true);
+  rooms.startGame(host.roomCode, host.playerToken);
+  const spectator = rooms.joinRoom(host.roomCode, "围观");
+  const view = rooms.snapshotForPlayer(host.roomCode, spectator.playerToken);
+  assert.equal(view.viewerRole, "spectator");
+  assert.equal(view.game?.viewerSeat, undefined);
+  assert.equal(view.game?.selfHand, undefined);
+  assert.equal(view.game?.selfDrawnTile, undefined);
+  assert.equal(view.spectators.length, 1);
+  assert.throws(
+    () => rooms.setReady(host.roomCode, spectator.playerToken, true),
+    (error) => error instanceof RoomError && error.code === "GAME_STARTED",
+  );
 });
 
 test("掉线后使用令牌恢复原座位", () => {

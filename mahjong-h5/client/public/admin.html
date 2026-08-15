@@ -58,7 +58,7 @@ pre { overflow:auto; max-height:420px; background:#0d1016; border:1px solid var(
 <div class="cards" id="cards"></div>
 <div class="table-wrap">
 <table>
-<thead><tr><th>房号</th><th>状态</th><th>人数</th><th>真人</th><th>在线</th><th>准备</th><th>局数</th><th>牌墙</th><th>阶段</th><th>动作</th><th>房主</th></tr></thead>
+<thead><tr><th>房号</th><th>状态</th><th>人数</th><th>观战</th><th>真人</th><th>在线</th><th>准备</th><th>局数</th><th>牌墙</th><th>阶段</th><th>动作</th><th>房主</th></tr></thead>
 <tbody id="rooms"></tbody>
 </table>
 </div>
@@ -108,7 +108,7 @@ async function loadSummary() {
   ];
   document.getElementById("cards").innerHTML = cards.map((card) => '<div class="card"><div class="label">' + esc(card.label) + '</div><div class="value">' + esc(card.value) + '</div></div>').join("");
   const rows = (data.rooms || []).map((room) => {
-    return '<tr data-code="' + esc(room.code) + '"><td>' + esc(room.code) + '</td><td>' + statusBadge(room.phase) + '</td><td>' + esc(room.playerCount) + '</td><td>' + esc(room.realPlayerCount) + '</td><td>' + esc(room.connectedPlayerCount) + '</td><td>' + esc(room.readyCount) + '</td><td>' + esc(room.completedRounds + "/" + room.totalRounds) + '</td><td>' + esc(room.wallRemaining ?? "-") + '</td><td>' + esc(room.stage ?? (room.phase === "waiting" ? "waiting" : room.phase)) + '</td><td>' + esc(room.publicActionCount) + '</td><td>' + esc(room.hostName ?? "-") + '</td></tr>';
+    return '<tr data-code="' + esc(room.code) + '"><td>' + esc(room.code) + '</td><td>' + statusBadge(room.phase) + '</td><td>' + esc(room.playerCount) + '</td><td>' + esc(room.spectatorCount ?? 0) + '</td><td>' + esc(room.realPlayerCount) + '</td><td>' + esc(room.connectedPlayerCount) + '</td><td>' + esc(room.readyCount) + '</td><td>' + esc(room.completedRounds + "/" + room.totalRounds) + '</td><td>' + esc(room.wallRemaining ?? "-") + '</td><td>' + esc(room.stage ?? (room.phase === "waiting" ? "waiting" : room.phase)) + '</td><td>' + esc(room.publicActionCount) + '</td><td>' + esc(room.hostName ?? "-") + '</td></tr>';
   }).join("");
   document.getElementById("rooms").innerHTML = rows;
   if (currentRoom) loadRoom(currentRoom);
@@ -136,7 +136,8 @@ async function loadRoom(code) {
     discards: room.game.discards.length,
     melds: room.game.melds.length
   } : null;
-  const content = '<h3>玩家</h3><table><thead><tr><th>座位</th><th>昵称</th><th>身份</th><th>类型</th><th>连接</th><th>托管</th><th>离线秒</th></tr></thead><tbody>' + playerRows + '</tbody></table><h3>牌桌公开状态</h3><pre>' + esc(JSON.stringify({ game: game, scoreTotals: room.scoreTotals, publicActionCount: room.publicActions.length }, null, 2)) + '</pre><h3>最近公共动作</h3><pre>' + esc(JSON.stringify(room.publicActions.slice(-20), null, 2)) + '</pre><h3>管理操作</h3><div class="admin-actions"><label>向房间内玩家发送公告<input id="announce-input" maxlength="200" placeholder="例如：维护结束，请勿创建新房间"></label><button id="announce-send" type="button">发送公告</button><button id="force-close" class="danger" type="button">强制解散房间</button></div><div id="admin-notice" class="admin-notice" hidden></div>';
+  const spectatorRows = (room.spectators || []).map((spectator) => '<tr><td>' + esc(spectator.name) + '</td><td>' + esc(spectator.connected ? "在线" : "离线") + '</td><td>' + esc(spectator.requestingSeat ? "求上桌" : "-") + '</td><td>' + esc(spectator.joinedSeconds + "秒") + '</td></tr>').join("");
+  const content = '<h3>玩家</h3><table><thead><tr><th>座位</th><th>昵称</th><th>身份</th><th>类型</th><th>连接</th><th>托管</th><th>离线秒</th></tr></thead><tbody>' + playerRows + '</tbody></table><h3>观战者</h3><table><thead><tr><th>昵称</th><th>连接</th><th>状态</th><th>加入时长</th></tr></thead><tbody>' + (spectatorRows || '<tr><td colspan="4" class="muted">暂无</td></tr>') + '</tbody></table><h3>牌桌公开状态</h3><pre>' + esc(JSON.stringify({ game: game, scoreTotals: room.scoreTotals, publicActionCount: room.publicActions.length }, null, 2)) + '</pre><h3>最近公共动作</h3><pre>' + esc(JSON.stringify(room.publicActions.slice(-20), null, 2)) + '</pre><h3>管理操作</h3><div class="admin-actions"><label>向房间内玩家发送公告<input id="announce-input" maxlength="200" placeholder="例如：维护结束，请勿创建新房间"></label><button id="announce-send" type="button">发送公告</button><button id="force-close" class="danger" type="button">强制解散房间</button></div><div id="admin-notice" class="admin-notice" hidden></div>';
   document.getElementById("detail-content").innerHTML = content;
 }
 document.getElementById("login-form").addEventListener("submit", (event) => { event.preventDefault(); token = document.getElementById("token").value.trim(); if (!token) return; sessionStorage.setItem(tokenKey, token); showDashboard(); loadSummary(); });

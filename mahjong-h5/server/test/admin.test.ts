@@ -14,6 +14,7 @@ test("后台概览统计房间、真人、测试玩家与等待/进行中数量"
     roomCount: 1,
     waitingRoomCount: 0,
     playingRoomCount: 1,
+    spectatorCount: 0,
     connectedPlayerCount: 2,
     realPlayerCount: 2,
     testPlayerCount: 2,

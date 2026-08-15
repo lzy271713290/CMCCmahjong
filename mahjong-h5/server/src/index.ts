@@ -15,7 +15,7 @@ const adminToken = process.env.ADMIN_TOKEN;
 const roomStore = new RoomStore(process.env.REDIS_URL);
 const manager = new RoomManager(undefined, undefined, undefined, roomStore);
 const socketsByToken = new Map<string, WebSocket>();
-const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string; seat: number }>();
+const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string; seat?: number }>();
 const projectRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const publicAssetsRoot = join(projectRoot, "client/public/assets");
 
@@ -176,7 +176,9 @@ const server = createServer(async (request, response) => {
   else if (pathname.startsWith("/assets/")) {
     try {
       const assetRelativePath = normalize(decodeURIComponent(pathname.slice("/assets/".length))).replace(/^[/\\]+/, "");
-      const assetPath = join(publicAssetsRoot, assetRelativePath);
+      const avatarAlias = /^avatars[\\/]avatar-a(\d+)\.svg$/.exec(assetRelativePath);
+      const resolvedAssetRelativePath = avatarAlias ? `avatars/avatar-${avatarAlias[1]}.svg` : assetRelativePath;
+      const assetPath = join(publicAssetsRoot, resolvedAssetRelativePath);
       const pathFromAssets = relative(publicAssetsRoot, assetPath);
       if (!pathFromAssets.startsWith("..") && !isAbsolute(pathFromAssets)) filePath = assetPath;
     } catch {
@@ -205,6 +207,13 @@ function send(socket: WebSocket, message: ServerMessage): void {
 function broadcast(roomCode: string): void {
   for (const [socket, session] of sessionsBySocket) {
     if (session.roomCode === roomCode) {
+      let seat: number | undefined;
+      try {
+        seat = manager.participant(roomCode, session.playerToken).seat;
+      } catch {
+        // 玩家/观战者可能刚离开，下一帧连接会被清理。
+      }
+      sessionsBySocket.set(socket, { ...session, seat });
       send(socket, { type: "snapshot", snapshot: manager.snapshotForPlayer(roomCode, session.playerToken) });
     }
   }
@@ -245,16 +254,16 @@ function broadcastVoiceState(roomCode: string, fromSeat: number, micOn: boolean,
   }
 }
 
-function broadcastChatMessage(roomCode: string, fromSeat: number, text: string): void {
-  const payload: ServerMessage = { type: "chat_message", fromSeat, text: text.slice(0, 200) };
+function broadcastChatMessage(roomCode: string, sender: { id: string; name: string; avatar: string; seat?: number }, text: string): void {
+  const payload: ServerMessage = { type: "chat_message", fromSeat: sender.seat, fromId: sender.id, fromName: sender.name, fromAvatar: sender.avatar, text: text.slice(0, 200) };
   for (const [socket, session] of sessionsBySocket) {
     if (session.roomCode !== roomCode) continue;
     send(socket, payload);
   }
 }
 
-function broadcastChatEmote(roomCode: string, fromSeat: number, emote: string, toSeat?: number): void {
-  const payload: ServerMessage = { type: "chat_emote", fromSeat, emote: emote.slice(0, 24), toSeat };
+function broadcastChatEmote(roomCode: string, sender: { id: string; name: string; avatar: string; seat?: number }, emote: string, toSeat?: number): void {
+  const payload: ServerMessage = { type: "chat_emote", fromSeat: sender.seat, fromId: sender.id, fromName: sender.name, fromAvatar: sender.avatar, emote: emote.slice(0, 24), toSeat };
   for (const [socket, session] of sessionsBySocket) {
     if (session.roomCode !== roomCode) continue;
     send(socket, payload);
@@ -276,7 +285,7 @@ function bindSession(socket: WebSocket, session: Session, connectionId: string, 
   const oldSocket = socketsByToken.get(session.playerToken);
   if (oldSocket && oldSocket !== socket) oldSocket.close(4001, "已在新连接恢复");
   socketsByToken.set(session.playerToken, socket);
-  const boundSeat = session.snapshot.players.find((player) => player.id === session.playerId)?.seat ?? 0;
+  const boundSeat = session.role === "spectator" ? undefined : session.snapshot.players.find((player) => player.id === session.playerId)?.seat;
   sessionsBySocket.set(socket, { roomCode: session.roomCode, playerToken: session.playerToken, seat: boundSeat });
   send(socket, { type: "session", ...session });
   broadcast(session.roomCode);
@@ -312,7 +321,7 @@ function bindSession(socket: WebSocket, session: Session, connectionId: string, 
   }
 }
 
-function requireSession(socket: WebSocket): { roomCode: string; playerToken: string; seat: number } {
+function requireSession(socket: WebSocket): { roomCode: string; playerToken: string; seat?: number } {
   const session = sessionsBySocket.get(socket);
   if (!session) throw new RoomError("SESSION_REQUIRED", "请先创建或加入房间");
   return session;
@@ -365,7 +374,7 @@ webSockets.on("connection", (socket) => {
           break;
         }
         case "join_room": {
-          const session = manager.joinRoom(message.roomCode, message.name, message.avatar);
+          const session = manager.joinRoom(message.roomCode, message.name, message.avatar, message.asSpectator === true);
           bindSession(socket, session, connectionId, "room_joined");
           break;
         }
@@ -374,6 +383,20 @@ webSockets.on("connection", (socket) => {
           const snapshot = manager.updateAvatar(session.roomCode, session.playerToken, message.avatar);
           broadcast(session.roomCode);
           logInfo("avatar_updated", { connectionId, roomCode: session.roomCode, seat: session.seat, revision: snapshot.revision });
+          break;
+        }
+        case "request_seat": {
+          const session = requireSession(socket);
+          const snapshot = manager.requestSeat(session.roomCode, session.playerToken);
+          broadcast(session.roomCode);
+          logInfo("seat_requested", { connectionId, roomCode: session.roomCode, revision: snapshot.revision });
+          break;
+        }
+        case "promote_spectator": {
+          const session = requireSession(socket);
+          const snapshot = manager.promoteSpectator(session.roomCode, session.playerToken, message.spectatorId);
+          broadcast(session.roomCode);
+          logInfo("spectator_promoted", { connectionId, roomCode: session.roomCode, spectatorId: shortId(message.spectatorId), revision: snapshot.revision });
           break;
         }
         case "reconnect": {
@@ -459,6 +482,7 @@ webSockets.on("connection", (socket) => {
         }
         case "voice_audio": {
           const session = requireSession(socket);
+          if (session.seat === undefined) throw new RoomError("SPECTATOR_NOT_ALLOWED", "观战者不能发送语音");
           if (typeof message.data !== "string" || !message.data || typeof message.mimeType !== "string") {
             throw new RoomError("VOICE_INVALID", "语音数据格式无效");
           }
@@ -472,6 +496,7 @@ webSockets.on("connection", (socket) => {
         }
         case "voice_state": {
           const session = requireSession(socket);
+          if (session.seat === undefined) throw new RoomError("SPECTATOR_NOT_ALLOWED", "观战者不能操作语音");
           broadcastVoiceState(session.roomCode, session.seat, Boolean(message.micOn), Boolean(message.speakerOn));
           break;
         }
@@ -479,14 +504,16 @@ webSockets.on("connection", (socket) => {
           const session = requireSession(socket);
           const text = typeof message.text === "string" ? message.text.trim() : "";
           if (!text) throw new RoomError("CHAT_EMPTY", "消息内容不能为空");
-          broadcastChatMessage(session.roomCode, session.seat, text);
+          const sender = manager.participant(session.roomCode, session.playerToken);
+          broadcastChatMessage(session.roomCode, { ...sender, seat: session.seat }, text);
           break;
         }
         case "chat_emote": {
           const session = requireSession(socket);
           const emote = typeof message.emote === "string" ? message.emote.trim() : "";
           if (!emote) throw new RoomError("EMOTE_EMPTY", "表情不能为空");
-          broadcastChatEmote(session.roomCode, session.seat, emote, typeof message.toSeat === "number" ? message.toSeat : undefined);
+          const sender = manager.participant(session.roomCode, session.playerToken);
+          broadcastChatEmote(session.roomCode, { ...sender, seat: session.seat }, emote, typeof message.toSeat === "number" ? message.toSeat : undefined);
           break;
         }
         case "start_next_round": {

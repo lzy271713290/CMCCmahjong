@@ -30,22 +30,23 @@ const winds = ["东", "南", "西", "北"];
 const lobby = required<HTMLElement>("lobby");
 const room = required<HTMLElement>("room");
 const gameScreen = required<HTMLElement>("game-screen");
+const waitingControls = required<HTMLElement>("waiting-controls");
+const spectatorStrip = required<HTMLElement>("spectator-strip");
+const waitingReadyButton = required<HTMLButtonElement>("waiting-ready");
+const waitingFillTestButton = required<HTMLButtonElement>("waiting-fill-test");
+const waitingStartButton = required<HTMLButtonElement>("waiting-start");
+const waitingLeaveButton = required<HTMLButtonElement>("waiting-leave");
+const waitingCopyButton = required<HTMLButtonElement>("waiting-copy");
 const nameInput = required<HTMLInputElement>("name");
 const matchRounds = required<HTMLSelectElement>("match-rounds");
 const codeInput = required<HTMLInputElement>("room-code");
 const createButton = required<HTMLButtonElement>("create");
 const joinButton = required<HTMLButtonElement>("join");
-const readyButton = required<HTMLButtonElement>("ready");
-const fillTestButton = required<HTMLButtonElement>("fill-test");
-const startButton = required<HTMLButtonElement>("start");
-const leaveRoomButton = required<HTMLButtonElement>("leave-room");
-const copyButton = required<HTMLButtonElement>("copy");
 const currentCode = required<HTMLElement>("current-code");
 const matchModeLabel = required<HTMLElement>("match-mode-label");
 const gameRoomCode = required<HTMLElement>("game-room-code");
 const gameMatchProgress = required<HTMLElement>("game-match-progress");
 const roundLabel = required<HTMLElement>("round-label");
-const seats = required<HTMLElement>("seats");
 const tableSeats = required<HTMLElement>("table-seats");
 const selfHand = required<HTMLElement>("self-hand");
 const wallStatus = required<HTMLElement>("wall-status");
@@ -146,7 +147,7 @@ let lastCountdownAlarmKey = "";
 const AVATAR_IDS = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"];
 let selectedAvatar = localStorage.getItem("mahjong-avatar") ?? "a1";
 if (!AVATAR_IDS.includes(selectedAvatar)) selectedAvatar = "a1";
-type ChatEntry = { seat: number; text: string; emote: boolean; ts: number };
+type ChatEntry = { seat?: number; senderId: string; senderName: string; senderAvatar: string; text: string; emote: boolean; ts: number };
 const chatHistory: ChatEntry[] = [];
 let slipperAnimationData: unknown;
 let lottieTimer: number | undefined;
@@ -164,7 +165,8 @@ function required<T extends HTMLElement>(id: string): T {
 }
 
 function avatarUrl(avatar: string): string {
-  return `/assets/avatars/avatar-${AVATAR_IDS.includes(avatar) ? avatar : "a1"}.svg`;
+  const id = AVATAR_IDS.includes(avatar) ? avatar : "a1";
+  return `/assets/avatars/avatar-${id.slice(1)}.svg`;
 }
 
 function iconSvg(name: "mic" | "mic-off" | "volume" | "volume-x" | "chat" | "slipper"): string {
@@ -333,13 +335,13 @@ function handleMessage(message: ServerMessage): void {
     showLobby();
     showNotice(`房间 ${message.roomCode} 已由管理员解散：${message.reason}`);
   } else if (message.type === "chat_message") {
-    appendChatEntry(message.fromSeat, message.text, false);
+    appendChatEntry(message.fromSeat, message.fromId, message.fromName, message.fromAvatar, message.text, false);
   } else if (message.type === "chat_emote") {
-    appendChatEntry(message.fromSeat, message.emote, true);
+    appendChatEntry(message.fromSeat, message.fromId, message.fromName, message.fromAvatar, message.emote, true);
     if (message.emote.includes("slipper") || message.emote.includes("🩴") || message.emote.includes("👡")) {
-      playSlipperThrow(message.fromSeat, message.toSeat);
+      playSlipperThrow(message.fromSeat, message.fromId, message.toSeat);
     } else {
-      showFloatingEmote(message.fromSeat, message.emote);
+      showFloatingEmote(message.fromSeat, message.fromId, message.emote);
     }
   } else if (message.type === "room_announcement") {
     showNotice(`管理员公告：${message.message}`);
@@ -356,12 +358,13 @@ function handleMessage(message: ServerMessage): void {
 function render(next: RoomSnapshot): void {
   snapshot = next;
   const me = next.players.find((player) => player.id === saved?.playerId);
+  const spectator = next.spectators.find((candidate) => candidate.id === saved?.playerId);
   const isPlaying = next.phase === "playing" && Boolean(next.game);
   audioManager.setInGame(isPlaying && next.match.status !== "completed");
-  document.body.classList.toggle("in-game", isPlaying);
+  document.body.classList.add("in-game");
   lobby.classList.add("hidden");
-  room.classList.toggle("hidden", isPlaying);
-  gameScreen.classList.toggle("hidden", !isPlaying);
+  room.classList.add("hidden");
+  gameScreen.classList.remove("hidden");
   currentCode.textContent = next.roomCode;
   matchModeLabel.textContent = `${next.match.totalRounds}局 · ${next.match.startScore ?? 100}分起`;
   gameRoomCode.textContent = next.roomCode;
@@ -369,81 +372,153 @@ function render(next: RoomSnapshot): void {
 
   if (isPlaying && next.game) {
     renderTable(next, me);
+    waitingControls.classList.add("hidden");
+    renderSpectatorStrip(next);
     renderPendingState();
     return;
   }
 
-  renderWaitingRoom(next, me);
+  renderWaitingTable(next, me, spectator);
   renderPendingState();
 }
 
-function renderWaitingRoom(next: RoomSnapshot, me: PlayerView | undefined): void {
-  seats.replaceChildren();
+function renderWaitingTable(next: RoomSnapshot, me: PlayerView | undefined, spectator: { id: string; name: string; avatar: string; connected: boolean; requestingSeat: boolean } | undefined): void {
+  waitingControls.classList.remove("hidden");
+  const viewerSeat = me?.seat ?? 0;
+  tableSeats.replaceChildren();
   for (let seat = 0; seat < 4; seat += 1) {
     const player = next.players.find((candidate) => candidate.seat === seat);
-    const card = document.createElement("div");
-    card.className = `seat${player ? " occupied" : ""}`;
-    const head = document.createElement("div");
-    head.className = "seat-head";
-    const role = document.createElement("span");
-    role.textContent = player
-      ? `${seat + 1}号位${player.isHost ? " · 房主" : player.isTestPlayer ? " · 测试" : ""}`
-      : `${seat + 1}号位`;
-    const state = document.createElement("span");
+    const position = positionForSeat(seat, viewerSeat);
+    const playerSeat = document.createElement("div");
+    playerSeat.className = `player-seat seat-${position}${player ? "" : " seat-empty"}${player?.connected === false ? " offline" : ""}`;
+    playerSeat.dataset.seat = String(seat);
+    const avatarBlock = document.createElement("div");
+    avatarBlock.className = "avatar-block";
+    const avatar = document.createElement("img");
+    avatar.className = "avatar";
+    const info = document.createElement("div");
+    info.className = "player-info";
     if (player) {
-      state.className = player.ready ? "ready" : "";
-      state.textContent = player.connected ? (player.ready ? "已准备" : "在线") : "暂离";
-    }
-    head.append(role, state);
-    card.append(head);
-    const main = document.createElement("div");
-    main.className = "seat-main";
-    if (player) {
-      const avatar = document.createElement("img");
-      avatar.className = "seat-avatar";
       avatar.src = avatarUrl(player.avatar);
       avatar.alt = "";
       avatar.title = player.id === saved?.playerId ? "点击更换头像" : player.name;
       if (player.id === saved?.playerId) avatar.addEventListener("click", openAvatarPicker);
-      const name = document.createElement("span");
-      name.className = "seat-name";
-      name.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
-      main.append(avatar, name);
+      const strong = document.createElement("strong");
+      strong.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+      const span = document.createElement("span");
+      span.textContent = player.connected
+        ? (player.isHost ? "房主 · " : "") + (player.ready ? "已准备" : "在线")
+        : "暂离";
+      if (player.isTestPlayer) span.textContent += " · 测试";
+      info.append(strong, span);
+      const actions = document.createElement("div");
+      actions.className = "player-actions";
       if (player.id === saved?.playerId) {
-        const hint = document.createElement("button");
-        hint.type = "button";
-        hint.className = "seat-edit-hint";
-        hint.textContent = "换头像";
-        hint.addEventListener("click", openAvatarPicker);
-        main.append(hint);
+        const chatButton = document.createElement("button");
+        chatButton.type = "button";
+        chatButton.className = "seat-action-btn";
+        chatButton.dataset.action = "chat";
+        chatButton.dataset.seat = String(seat);
+        chatButton.setAttribute("aria-label", "公屏聊天");
+        chatButton.innerHTML = iconSvg("chat");
+        actions.append(chatButton);
       }
+      avatarBlock.append(avatar, actions);
     } else {
-      const name = document.createElement("span");
-      name.className = "seat-name";
-      name.textContent = "等待加入";
-      main.append(name);
+      const emptyBox = document.createElement("div");
+      emptyBox.className = "avatar seat-empty-avatar";
+      const invite = document.createElement("button");
+      invite.type = "button";
+      invite.className = "seat-empty-invite";
+      invite.textContent = "邀";
+      invite.title = "邀请好友";
+      invite.addEventListener("click", () => void shareCurrentRoom());
+      emptyBox.append(invite);
+      avatarBlock.append(emptyBox);
+      const strong = document.createElement("strong");
+      strong.textContent = "等待加入";
+      const span = document.createElement("span");
+      span.textContent = "邀请好友上桌";
+      info.append(strong, span);
     }
-    card.append(main);
-    seats.append(card);
+    playerSeat.append(avatarBlock, info);
+    tableSeats.append(playerSeat);
   }
-  readyButton.textContent = me?.ready ? "取消准备" : "准备";
+  renderSpectatorStrip(next);
+  waitingReadyButton.textContent = me
+    ? (me.ready ? "取消准备" : "准备")
+    : spectator
+      ? (spectator.requestingSeat ? "已申请上桌" : "申请上桌")
+      : "准备";
   const testPlayerCount = next.players.filter((player) => player.isTestPlayer).length;
   const canStart = Boolean(
     me?.isHost
     && next.players.length === 4
     && next.players.every((player) => player.ready && (player.connected || player.isTestPlayer)),
   );
-  fillTestButton.textContent = testPlayerCount > 0 ? `移除测试玩家（${testPlayerCount}）` : "一键补齐测试玩家";
-  fillTestButton.classList.toggle("hidden", !me?.isHost || (testPlayerCount === 0 && next.players.length >= 4));
-  startButton.classList.toggle("hidden", !canStart);
+  waitingFillTestButton.textContent = testPlayerCount > 0 ? `移除测试玩家（${testPlayerCount}）` : "一键补齐测试玩家";
+  waitingFillTestButton.classList.toggle("hidden", !me?.isHost || (testPlayerCount === 0 && next.players.length >= 4));
+  waitingStartButton.classList.toggle("hidden", !canStart);
+  waitingReadyButton.classList.toggle("hidden", Boolean(spectator));
+  wallStatus.textContent = "等待开局";
+  turnStatus.textContent = next.players.length < 4 ? "等待好友加入或补齐测试玩家" : "请各位玩家准备";
+  actionCountdown.textContent = "--";
+  operationPanel.classList.add("hidden");
+  scoreSummary.classList.add("hidden");
+  actionBanner.classList.add("hidden");
+  selfHand.replaceChildren();
+  for (const position of positions) {
+    required<HTMLElement>(`discards-${position}`).replaceChildren();
+    required<HTMLElement>(`wall-${position}`).replaceChildren();
+  }
+}
+
+function renderSpectatorStrip(next: RoomSnapshot): void {
+  spectatorStrip.replaceChildren();
+  if (next.spectators.length === 0) {
+    spectatorStrip.classList.add("hidden");
+    return;
+  }
+  spectatorStrip.classList.remove("hidden");
+  const label = document.createElement("span");
+  label.className = "spectator-label";
+  label.textContent = `观战 ${next.spectators.length}`;
+  spectatorStrip.append(label);
+  const me = next.players.find((player) => player.id === saved?.playerId);
+  const hasFreeSeat = next.players.length < 4;
+  for (const spectator of next.spectators) {
+    const chip = document.createElement("div");
+    chip.className = `spectator-chip${spectator.requestingSeat ? " requesting" : ""}${spectator.connected ? "" : " offline"}`;
+    chip.dataset.spectatorId = spectator.id;
+    const avatar = document.createElement("img");
+    avatar.className = "spectator-avatar";
+    avatar.src = avatarUrl(spectator.avatar);
+    avatar.alt = "";
+    const name = document.createElement("span");
+    name.className = "spectator-name";
+    name.textContent = `${spectator.name}${spectator.id === saved?.playerId ? "（我）" : ""}${spectator.requestingSeat ? " 求上桌" : ""}`;
+    chip.append(avatar, name);
+    if (me?.isHost && next.phase === "waiting" && hasFreeSeat) {
+      const promote = document.createElement("button");
+      promote.type = "button";
+      promote.className = "spectator-promote";
+      promote.dataset.action = "promote";
+      promote.dataset.spectatorId = spectator.id;
+      promote.textContent = "上桌";
+      chip.append(promote);
+    }
+    spectatorStrip.append(chip);
+  }
 }
 
 function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   const game = next.game!;
   const viewerSeat = game.viewerSeat ?? me?.seat ?? 0;
-  roundLabel.textContent = `第${game.roundNumber}/${next.match.totalRounds}局 · ${winds[(viewerSeat - game.dealerSeat + 4) % 4]}位视角`;
+  const isSpectator = next.viewerRole === "spectator";
+  roundLabel.textContent = `第${game.roundNumber}/${next.match.totalRounds}局 · ${isSpectator ? "观战视角" : `${winds[(viewerSeat - game.dealerSeat + 4) % 4]}位视角`}`;
   wallStatus.textContent = String(game.wallRemaining);
   renderPlayers(next, viewerSeat);
+  renderSpectatorStrip(next);
   renderWalls(game.wallRemaining);
   renderDiscards(game.discards, viewerSeat);
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
@@ -500,18 +575,22 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     avatar.alt = "";
     const actions = document.createElement("div");
     actions.className = "player-actions";
-    const micButton = document.createElement("button");
-    micButton.type = "button";
-    micButton.className = "seat-action-btn";
-    micButton.dataset.action = "mic";
-    micButton.dataset.seat = String(player.seat);
-    micButton.setAttribute("aria-label", "麦克风");
-    const speakerButton = document.createElement("button");
-    speakerButton.type = "button";
-    speakerButton.className = "seat-action-btn";
-    speakerButton.dataset.action = "speaker";
-    speakerButton.dataset.seat = String(player.seat);
-    speakerButton.setAttribute("aria-label", "喇叭");
+    const isSpectator = snapshot?.viewerRole === "spectator";
+    if (!isSpectator) {
+      const micButton = document.createElement("button");
+      micButton.type = "button";
+      micButton.className = "seat-action-btn";
+      micButton.dataset.action = "mic";
+      micButton.dataset.seat = String(player.seat);
+      micButton.setAttribute("aria-label", "麦克风");
+      const speakerButton = document.createElement("button");
+      speakerButton.type = "button";
+      speakerButton.className = "seat-action-btn";
+      speakerButton.dataset.action = "speaker";
+      speakerButton.dataset.seat = String(player.seat);
+      speakerButton.setAttribute("aria-label", "喇叭");
+      actions.append(micButton, speakerButton);
+    }
     const chatButton = document.createElement("button");
     chatButton.type = "button";
     chatButton.className = "seat-action-btn";
@@ -519,7 +598,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     chatButton.dataset.seat = String(player.seat);
     chatButton.setAttribute("aria-label", "公屏聊天");
     chatButton.innerHTML = iconSvg("chat");
-    actions.append(micButton, speakerButton, chatButton);
+    actions.append(chatButton);
     if (position !== "bottom") {
       const slipperButton = document.createElement("button");
       slipperButton.type = "button";
@@ -1178,7 +1257,7 @@ function clearPendingRequest(): void {
 function renderPendingState(): void {
   const busy = Boolean(pendingRequest);
   document.body.classList.toggle("request-pending", busy);
-  document.querySelectorAll<HTMLButtonElement>("#lobby button, #room button, #self-hand button, #operation-panel button, #score-summary button")
+  document.querySelectorAll<HTMLButtonElement>("#lobby button, #room button, #waiting-controls button, #spectator-strip button, #self-hand button, #operation-panel button, #score-summary button")
     .forEach((button) => { button.disabled = busy; });
 }
 
@@ -1268,6 +1347,8 @@ function showLobby(): void {
   document.body.classList.remove("in-game");
   room.classList.add("hidden");
   gameScreen.classList.add("hidden");
+  waitingControls.classList.add("hidden");
+  spectatorStrip.classList.add("hidden");
   lobby.classList.remove("hidden");
   networkOverlay.classList.add("hidden");
   setChatVisible(false);
@@ -1380,8 +1461,8 @@ function syncVoiceButtons(): void {
   });
 }
 
-function appendChatEntry(seat: number, text: string, emote: boolean): void {
-  chatHistory.push({ seat, text, emote, ts: Date.now() });
+function appendChatEntry(seat: number | undefined, senderId: string, senderName: string, senderAvatar: string, text: string, emote: boolean): void {
+  chatHistory.push({ seat, senderId, senderName, senderAvatar, text, emote, ts: Date.now() });
   if (chatHistory.length > 60) chatHistory.shift();
   renderChatHistory();
 }
@@ -1390,19 +1471,27 @@ function renderChatHistory(): void {
   chatMessages.replaceChildren();
   for (const entry of chatHistory) {
     const row = document.createElement("div");
-    row.className = `chat-entry${entry.seat === snapshot?.game?.viewerSeat || entry.seat === snapshot?.players.find((player) => player.id === saved?.playerId)?.seat ? " me" : ""}`;
+    row.className = `chat-entry${entry.senderId === saved?.playerId ? " me" : ""}`;
     if (entry.emote) {
+      const avatar = document.createElement("img");
+      avatar.className = "chat-avatar";
+      avatar.src = avatarUrl(entry.senderAvatar);
+      avatar.alt = "";
       const emoteText = document.createElement("span");
       emoteText.className = "chat-emote-text";
       emoteText.textContent = entry.text;
-      row.append(emoteText);
+      row.append(avatar, emoteText);
     } else {
+      const avatar = document.createElement("img");
+      avatar.className = "chat-avatar";
+      avatar.src = avatarUrl(entry.senderAvatar);
+      avatar.alt = "";
       const name = document.createElement("span");
       name.className = "chat-name";
-      name.textContent = `${playerName(snapshot!, entry.seat)}：`;
+      name.textContent = `${entry.senderName}：`;
       const body = document.createElement("span");
       body.textContent = entry.text;
-      row.append(name, body);
+      row.append(avatar, name, body);
     }
     chatMessages.append(row);
   }
@@ -1432,8 +1521,10 @@ function throwSlipperAt(targetSeat: number): void {
   sendDirect({ type: "chat_emote", emote: "slipper", toSeat: targetSeat });
 }
 
-function playSlipperThrow(fromSeat: number, toSeat?: number): void {
-  const source = document.querySelector<HTMLElement>(`.player-seat[data-seat="${fromSeat}"]`);
+function playSlipperThrow(fromSeat: number | undefined, fromId: string, toSeat?: number): void {
+  const source = fromSeat === undefined
+    ? document.querySelector<HTMLElement>(`.spectator-chip[data-spectator-id="${fromId}"]`)
+    : document.querySelector<HTMLElement>(`.player-seat[data-seat="${fromSeat}"]`);
   const target = toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"]`);
   const startRect = source?.getBoundingClientRect();
   const endRect = target?.getBoundingClientRect() ?? source?.getBoundingClientRect();
@@ -1491,10 +1582,24 @@ function showSmackBurst(x: number, y: number): void {
   lottieTimer = window.setTimeout(() => burst.remove(), 1350);
 }
 
-function showFloatingEmote(seat: number, emote: string): void {
-  const seatElement = document.querySelector<HTMLElement>(`.player-seat[data-seat="${seat}"]`);
+function showFloatingEmote(seat: number | undefined, senderId: string, emote: string): void {
+  const seatElement = seat === undefined
+    ? document.querySelector<HTMLElement>(`.spectator-chip[data-spectator-id="${senderId}"]`)
+    : document.querySelector<HTMLElement>(`.player-seat[data-seat="${seat}"]`);
   const rect = seatElement?.getBoundingClientRect();
-  if (!rect) return;
+  if (!rect) {
+    const fallback = document.querySelector<HTMLElement>("#spectator-strip") ?? chatToggleButton;
+    const fallbackRect = fallback?.getBoundingClientRect();
+    if (!fallbackRect) return;
+    const bubble = document.createElement("div");
+    bubble.className = "emote-bubble";
+    bubble.textContent = emote;
+    bubble.style.left = `${fallbackRect.left + fallbackRect.width / 2}px`;
+    bubble.style.top = `${fallbackRect.top}px`;
+    throwEffect.append(bubble);
+    window.setTimeout(() => bubble.remove(), 1700);
+    return;
+  }
   const bubble = document.createElement("div");
   bubble.className = "emote-bubble";
   bubble.textContent = emote;
@@ -1752,23 +1857,27 @@ joinButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   if (!/^\d{6}$/.test(codeInput.value.trim())) return showNotice("请输入六位房间号");
   localStorage.setItem("mahjong-nickname", nameInput.value.trim());
-  send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value, avatar: selectedAvatar });
+  const asSpectator = new URLSearchParams(location.search).get("watch") === "1";
+  send({ type: "join_room", roomCode: codeInput.value, name: nameInput.value, avatar: selectedAvatar, asSpectator });
 });
-readyButton.addEventListener("click", () => {
+waitingReadyButton.addEventListener("click", () => {
   const me = snapshot?.players.find((player) => player.id === saved?.playerId);
-  send({ type: "set_ready", ready: !me?.ready });
+  if (me) send({ type: "set_ready", ready: !me.ready });
+  else if (snapshot?.spectators.some((candidate) => candidate.id === saved?.playerId)) {
+    send({ type: "request_seat" });
+  }
 });
-fillTestButton.addEventListener("click", () => {
+waitingFillTestButton.addEventListener("click", () => {
   const hasTestPlayers = snapshot?.players.some((player) => player.isTestPlayer);
   send({ type: hasTestPlayers ? "remove_test_players" : "fill_test_players" });
 });
-leaveRoomButton.addEventListener("click", returnToLobby);
-startButton.addEventListener("click", () => {
+waitingLeaveButton.addEventListener("click", returnToLobby);
+waitingStartButton.addEventListener("click", () => {
   audioManager.activate();
   audioManager.setInGame(true);
   send({ type: "start_game" });
 });
-copyButton.addEventListener("click", async () => {
+waitingCopyButton.addEventListener("click", async () => {
   const roomCode = currentCode.textContent ?? "";
   try {
     await copyText(`好友麻将房间 ${roomCode}\n${location.origin}/?room=${roomCode}`);
@@ -1776,6 +1885,11 @@ copyButton.addEventListener("click", async () => {
   } catch {
     showNotice(`请把房间号 ${roomCode} 发给朋友`);
   }
+});
+spectatorStrip.addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-action='promote']");
+  if (!button?.dataset.spectatorId) return;
+  send({ type: "promote_spectator", spectatorId: button.dataset.spectatorId });
 });
 shareRoomButton.addEventListener("click", () => shareCurrentRoom());
 soundToggleButton.addEventListener("click", () => {

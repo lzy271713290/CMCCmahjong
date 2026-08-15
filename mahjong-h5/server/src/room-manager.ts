@@ -30,12 +30,23 @@ type Player = {
   autoManaged: boolean;
 };
 
+type Spectator = {
+  id: string;
+  token: string;
+  name: string;
+  avatar: string;
+  connected: boolean;
+  requestingSeat: boolean;
+  joinedAt: number;
+};
+
 type Room = {
   code: string;
   revision: number;
   phase: "waiting" | "playing";
   hostPlayerId: string;
   players: Player[];
+  spectators: Spectator[];
   scoreTotals: number[];
   startScore: number;
   totalRounds: MatchMode;
@@ -59,6 +70,7 @@ export type Session = {
   roomCode: string;
   playerId: string;
   playerToken: string;
+  role: "player" | "spectator";
   snapshot: RoomSnapshot;
   autoManagementReleased?: boolean;
 };
@@ -72,6 +84,7 @@ export const DEFAULT_AVATAR = "a1";
 export const DISCARD_TIMEOUT_MS = 30_000;
 export const REACTION_TIMEOUT_MS = 12_000;
 export const AUTO_MANAGEMENT_AFTER_MS = 90_000;
+export const MAX_SPECTATORS = 20;
 
 export type GovernanceEvent =
   | { kind: "auto_management_started"; seat: number; offlineMs: number }
@@ -152,11 +165,20 @@ export type EarlySettlementProgress = {
 export type LeaveRoomResult = {
   roomCode: string;
   playerId: string;
-  seat: number;
+  seat?: number;
   wasHost: boolean;
   nextHostPlayerId?: string;
   deleted: boolean;
   snapshot?: RoomSnapshot;
+};
+
+export type AdminSpectatorView = {
+  id: string;
+  name: string;
+  avatar: string;
+  connected: boolean;
+  requestingSeat: boolean;
+  joinedSeconds: number;
 };
 
 export type AdminRoomPlayerView = {
@@ -175,6 +197,7 @@ export type AdminRoomSummary = {
   code: string;
   phase: Room["phase"];
   playerCount: number;
+  spectatorCount: number;
   connectedPlayerCount: number;
   realPlayerCount: number;
   testPlayerCount: number;
@@ -196,6 +219,7 @@ export type AdminRoomDetail = {
   revision: number;
   phase: Room["phase"];
   players: AdminRoomPlayerView[];
+  spectators: AdminSpectatorView[];
   scoreTotals: number[];
   match: RoomSnapshot["match"];
   publicActions: PublicActionView[];
@@ -223,6 +247,7 @@ export type AdminStats = {
   roomCount: number;
   waitingRoomCount: number;
   playingRoomCount: number;
+  spectatorCount: number;
   connectedPlayerCount: number;
   realPlayerCount: number;
   testPlayerCount: number;
@@ -307,6 +332,7 @@ export class RoomManager {
       phase: "waiting",
       hostPlayerId: player.id,
       players: [player],
+      spectators: [],
       scoreTotals: [normalizedStartScore, normalizedStartScore, normalizedStartScore, normalizedStartScore],
       startScore: normalizedStartScore,
       totalRounds,
@@ -319,12 +345,9 @@ export class RoomManager {
     return this.toSession(room, player);
   }
 
-  joinRoom(rawCode: string, rawName: string, rawAvatar?: string): Session {
+  joinRoom(rawCode: string, rawName: string, rawAvatar?: string, asSpectator = false): Session {
     const room = this.getRoom(rawCode);
-    if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "本局已经开始，暂时不能加入");
-    if (room.players.length >= 4) {
-      throw new RoomError("ROOM_FULL", "房间已经坐满 4 人");
-    }
+    if (asSpectator || room.players.length >= 4 || room.phase !== "waiting") return this.joinAsSpectator(room, rawName, rawAvatar);
     const name = this.normalizeName(rawName);
     const avatar = this.normalizeAvatar(rawAvatar);
     const occupied = new Set(room.players.map((player) => player.seat));
@@ -336,10 +359,29 @@ export class RoomManager {
     return this.toSession(room, player);
   }
 
+  private joinAsSpectator(room: Room, rawName: string, rawAvatar?: string): Session {
+    if (room.spectators.length >= MAX_SPECTATORS) {
+      throw new RoomError("SPECTATOR_LIMIT", `观战人数已满（${MAX_SPECTATORS}人）`);
+    }
+    const name = this.normalizeName(rawName);
+    const avatar = this.normalizeAvatar(rawAvatar);
+    const spectator = this.createSpectator(name, avatar);
+    room.spectators.push(spectator);
+    room.revision += 1;
+    return {
+      roomCode: room.code,
+      playerId: spectator.id,
+      playerToken: spectator.token,
+      role: "spectator",
+      snapshot: this.snapshotForPlayer(room.code, spectator.token),
+    };
+  }
+
   updateAvatar(rawCode: string, playerToken: string, rawAvatar?: string): RoomSnapshot {
     const room = this.getRoom(rawCode);
-    const player = room.players.find((candidate) => candidate.token === playerToken);
-    if (!player) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    const player = room.players.find((candidate) => candidate.token === playerToken)
+      ?? room.spectators.find((candidate) => candidate.token === playerToken);
+    if (!player) throw new RoomError("TOKEN_INVALID", "身份已失效");
     const avatar = this.normalizeAvatar(rawAvatar);
     if (player.avatar !== avatar) {
       player.avatar = avatar;
@@ -348,23 +390,78 @@ export class RoomManager {
     return this.snapshot(room.code);
   }
 
+  requestSeat(rawCode: string, playerToken: string): RoomSnapshot {
+    const room = this.getRoom(rawCode);
+    if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "牌局已经开始，暂时不能上桌");
+    const spectator = room.spectators.find((candidate) => candidate.token === playerToken);
+    if (!spectator) throw new RoomError("TOKEN_INVALID", "只有观战者可以申请上桌");
+    if (!spectator.requestingSeat) {
+      spectator.requestingSeat = true;
+      room.revision += 1;
+    }
+    return this.snapshot(room.code);
+  }
+
+  promoteSpectator(rawCode: string, operatorToken: string, spectatorId: string): RoomSnapshot {
+    const room = this.getRoom(rawCode);
+    if (room.phase !== "waiting") throw new RoomError("GAME_STARTED", "牌局已经开始，不能安排上桌");
+    const operator = room.players.find((candidate) => candidate.token === operatorToken);
+    if (!operator) throw new RoomError("TOKEN_INVALID", "操作者身份已失效");
+    if (operator.id !== room.hostPlayerId) throw new RoomError("HOST_REQUIRED", "只有房主可以安排观战者上桌");
+    const spectator = room.spectators.find((candidate) => candidate.id === spectatorId);
+    if (!spectator) throw new RoomError("SPECTATOR_NOT_FOUND", "观战者已离开房间");
+    if (!spectator.connected) throw new RoomError("SPECTATOR_OFFLINE", "该观战者已离线，请等待其重连");
+    const occupied = new Set(room.players.map((player) => player.seat));
+    const seat = [0, 1, 2, 3].find((candidate) => !occupied.has(candidate));
+    if (seat === undefined) throw new RoomError("ROOM_FULL", "四个座位都已坐满");
+    const player: Player = {
+      id: spectator.id,
+      token: spectator.token,
+      name: spectator.name,
+      avatar: spectator.avatar,
+      seat,
+      ready: false,
+      connected: true,
+      isTestPlayer: false,
+      autoManaged: false,
+    };
+    room.players.push(player);
+    room.spectators = room.spectators.filter((candidate) => candidate.id !== spectator.id);
+    room.revision += 1;
+    return this.snapshot(room.code);
+  }
+
   reconnect(rawCode: string, playerToken: string): Session {
     const room = this.getRoom(rawCode);
     const player = room.players.find((candidate) => candidate.token === playerToken);
-    if (!player) throw new RoomError("TOKEN_INVALID", "原座位已失效，请重新加入");
-    let autoManagementReleased = false;
-    if (!player.connected) {
-      player.connected = true;
-      player.disconnectedAt = undefined;
-      if (player.autoManaged) {
-        player.autoManaged = false;
-        autoManagementReleased = true;
-        if (room.game) this.recordPublicAction(room, { kind: "auto_management_ended", seat: player.seat });
+    if (player) {
+      let autoManagementReleased = false;
+      if (!player.connected) {
+        player.connected = true;
+        player.disconnectedAt = undefined;
+        if (player.autoManaged) {
+          player.autoManaged = false;
+          autoManagementReleased = true;
+          if (room.game) this.recordPublicAction(room, { kind: "auto_management_ended", seat: player.seat });
+        }
+        if (room.game) this.recordPublicAction(room, { kind: "player_reconnected", seat: player.seat });
+        room.revision += 1;
       }
-      if (room.game) this.recordPublicAction(room, { kind: "player_reconnected", seat: player.seat });
+      return { ...this.toSession(room, player), autoManagementReleased };
+    }
+    const spectator = room.spectators.find((candidate) => candidate.token === playerToken);
+    if (!spectator) throw new RoomError("TOKEN_INVALID", "身份已失效，请重新加入");
+    if (!spectator.connected) {
+      spectator.connected = true;
       room.revision += 1;
     }
-    return { ...this.toSession(room, player), autoManagementReleased };
+    return {
+      roomCode: room.code,
+      playerId: spectator.id,
+      playerToken: spectator.token,
+      role: "spectator",
+      snapshot: this.snapshotForPlayer(room.code, spectator.token),
+    };
   }
 
   disconnect(rawCode: string, playerToken: string): void {
@@ -375,11 +472,29 @@ export class RoomManager {
       player.disconnectedAt = this.now();
       if (room.game) this.recordPublicAction(room, { kind: "player_disconnected", seat: player.seat });
       room.revision += 1;
+      return;
+    }
+    const spectator = room?.spectators.find((candidate) => candidate.token === playerToken);
+    if (room && spectator?.connected) {
+      spectator.connected = false;
+      room.revision += 1;
     }
   }
 
   leaveRoom(rawCode: string, playerToken: string): LeaveRoomResult {
     const room = this.getRoom(rawCode);
+    const spectator = room.spectators.find((candidate) => candidate.token === playerToken);
+    if (spectator) {
+      room.spectators = room.spectators.filter((candidate) => candidate.token !== playerToken);
+      room.revision += 1;
+      return {
+        roomCode: room.code,
+        playerId: spectator.id,
+        wasHost: false,
+        deleted: false,
+        snapshot: this.snapshot(room.code),
+      };
+    }
     if (room.phase !== "waiting" && !room.matchEndReason) throw new RoomError("GAME_STARTED", "牌局进行中不能退出座位，请等待重连");
     const player = room.players.find((candidate) => candidate.token === playerToken);
     if (!player || player.isTestPlayer) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
@@ -960,21 +1075,33 @@ export class RoomManager {
 
   snapshotForPlayer(rawCode: string, playerToken: string): RoomSnapshot {
     const room = this.getRoom(rawCode);
-    const viewer = room.players.find((player) => player.token === playerToken);
-    if (!viewer) throw new RoomError("TOKEN_INVALID", "玩家身份已失效");
+    const viewer = room.players.find((player) => player.token === playerToken)
+      ?? room.spectators.find((spectator) => spectator.token === playerToken);
+    if (!viewer) throw new RoomError("TOKEN_INVALID", "身份已失效");
     return this.buildSnapshot(room, viewer);
+  }
+
+  participant(rawCode: string, playerToken: string): { id: string; name: string; avatar: string; seat?: number } {
+    const room = this.getRoom(rawCode);
+    const player = room.players.find((candidate) => candidate.token === playerToken);
+    if (player) return { id: player.id, name: player.name, avatar: player.avatar, seat: player.seat };
+    const spectator = room.spectators.find((candidate) => candidate.token === playerToken);
+    if (spectator) return { id: spectator.id, name: spectator.name, avatar: spectator.avatar };
+    throw new RoomError("TOKEN_INVALID", "身份已失效");
   }
 
   adminStats(): AdminStats {
     const rooms = [...this.rooms.values()];
     let waitingRoomCount = 0;
     let playingRoomCount = 0;
+    let spectatorCount = 0;
     let connectedPlayerCount = 0;
     let realPlayerCount = 0;
     let testPlayerCount = 0;
     for (const room of rooms) {
       if (room.phase === "waiting") waitingRoomCount += 1;
       else playingRoomCount += 1;
+      spectatorCount += room.spectators.length;
       for (const player of room.players) {
         if (player.isTestPlayer) testPlayerCount += 1;
         else {
@@ -983,7 +1110,7 @@ export class RoomManager {
         }
       }
     }
-    return { roomCount: rooms.length, waitingRoomCount, playingRoomCount, connectedPlayerCount, realPlayerCount, testPlayerCount };
+    return { roomCount: rooms.length, waitingRoomCount, playingRoomCount, spectatorCount, connectedPlayerCount, realPlayerCount, testPlayerCount };
   }
 
   listAdminRooms(): AdminRoomSummary[] {
@@ -993,6 +1120,7 @@ export class RoomManager {
         code: room.code,
         phase: room.phase,
         playerCount: room.players.length,
+        spectatorCount: room.spectators.length,
         connectedPlayerCount: room.players.filter((player) => !player.isTestPlayer && player.connected).length,
         realPlayerCount: room.players.filter((player) => !player.isTestPlayer).length,
         testPlayerCount: room.players.filter((player) => player.isTestPlayer).length,
@@ -1030,6 +1158,14 @@ export class RoomManager {
           autoManaged: player.autoManaged,
           offlineSeconds: player.disconnectedAt === undefined ? undefined : Math.max(0, Math.floor((this.now() - player.disconnectedAt) / 1_000)),
         })),
+      spectators: [...room.spectators].map((spectator) => ({
+        id: spectator.id,
+        name: spectator.name,
+        avatar: spectator.avatar,
+        connected: spectator.connected,
+        requestingSeat: spectator.requestingSeat,
+        joinedSeconds: Math.max(0, Math.floor((this.now() - spectator.joinedAt) / 1_000)),
+      })),
       scoreTotals: [...room.scoreTotals],
       match: snapshot.match,
       publicActions: snapshot.publicActions,
@@ -1163,14 +1299,29 @@ export class RoomManager {
     const players = Array.isArray(raw.players)
       ? raw.players.map((player) => isRecord(player) ? { ...player, avatar: this.normalizeAvatar(player.avatar) } : player)
       : raw.players;
-    return { ...raw, players, startScore, earlySettlement, game } as Room;
+    const spectators = Array.isArray(raw.spectators)
+      ? raw.spectators
+          .filter(isRecord)
+          .map((spectator) => ({
+            id: typeof spectator.id === "string" ? spectator.id : randomUUID(),
+            token: typeof spectator.token === "string" ? spectator.token : randomUUID(),
+            name: typeof spectator.name === "string" ? spectator.name : "观战者",
+            avatar: this.normalizeAvatar(spectator.avatar),
+            connected: spectator.connected !== false,
+            requestingSeat: spectator.requestingSeat === true,
+            joinedAt: typeof spectator.joinedAt === "number" ? spectator.joinedAt : Date.now(),
+          }))
+      : [];
+    return { ...raw, players, spectators, startScore, earlySettlement, game } as Room;
   }
 
-  private buildSnapshot(room: Room, viewer?: Player): RoomSnapshot {
+  private buildSnapshot(room: Room, viewer?: Player | Spectator): RoomSnapshot {
+    const viewerSeat = viewer && "seat" in viewer ? viewer.seat : undefined;
     return {
       roomCode: room.code,
       revision: room.revision,
       phase: room.phase,
+      viewerRole: viewer ? ("seat" in viewer ? "player" : "spectator") : undefined,
       players: [...room.players]
         .sort((left, right) => left.seat - right.seat)
         .map((player) => ({
@@ -1183,6 +1334,13 @@ export class RoomManager {
           isHost: player.id === room.hostPlayerId,
           isTestPlayer: player.isTestPlayer,
           autoManaged: player.autoManaged,
+      })),
+      spectators: [...room.spectators].map((spectator) => ({
+        id: spectator.id,
+        name: spectator.name,
+        avatar: spectator.avatar,
+        connected: spectator.connected,
+        requestingSeat: spectator.requestingSeat,
       })),
       scoreTotals: [...room.scoreTotals],
       publicActions: room.publicActions.map((action) => ({
@@ -1226,13 +1384,13 @@ export class RoomManager {
             handTileCounts: [0, 1, 2, 3].map((seat) => room.game?.hands.get(seat)?.length ?? 0),
             actionDeadlineAt: room.actionDeadlineAt,
             actionTimeoutSeconds: room.game.stage === "awaiting_reactions" ? REACTION_TIMEOUT_MS / 1_000 : room.game.stage === "awaiting_discard" ? DISCARD_TIMEOUT_MS / 1_000 : undefined,
-            viewerSeat: viewer?.seat,
-            selfHand: viewer ? sortTiles(room.game.hands.get(viewer.seat) ?? []).map((tile) => tile.code) : undefined,
-            selfDrawnTile: viewer && room.game.lastDraw?.seat === viewer.seat ? room.game.lastDraw.tile.code : undefined,
+            viewerSeat,
+            selfHand: viewerSeat === undefined ? undefined : sortTiles(room.game.hands.get(viewerSeat) ?? []).map((tile) => tile.code),
+            selfDrawnTile: viewerSeat !== undefined && room.game.lastDraw?.seat === viewerSeat ? room.game.lastDraw.tile.code : undefined,
             latestDiscard: room.game.discards.at(-1),
             discards: [...room.game.discards],
             melds: [...room.game.melds.values()].flat().map((meld) =>
-              meld.gangType === "an" && viewer?.seat !== meld.seat
+              meld.gangType === "an" && viewerSeat !== meld.seat
                 ? { ...meld, tiles: [], hiddenTileCount: meld.tiles.length }
                 : { ...meld },
             ),
@@ -1249,15 +1407,15 @@ export class RoomManager {
                 }
               : undefined,
             availableOperations:
-              viewer && room.game.pendingReaction && !room.game.pendingReaction.responses.has(viewer.seat)
-                ? room.game.pendingReaction.optionsBySeat.get(viewer.seat)
+              viewerSeat !== undefined && room.game.pendingReaction && !room.game.pendingReaction.responses.has(viewerSeat)
+                ? room.game.pendingReaction.optionsBySeat.get(viewerSeat)
                 : undefined,
             availableTurnOperations:
-              viewer && room.game.stage === "awaiting_discard" && room.game.turnSeat === viewer.seat
+              viewerSeat !== undefined && room.game.stage === "awaiting_discard" && room.game.turnSeat === viewerSeat
                 ? findTurnOperationOptions(
-                    room.game.hands.get(viewer.seat) ?? [],
-                    viewer.seat,
-                    room.game.melds.get(viewer.seat) ?? [],
+                    room.game.hands.get(viewerSeat) ?? [],
+                    viewerSeat,
+                    room.game.melds.get(viewerSeat) ?? [],
                     room.game.lastDraw,
                     room.game.wall.length,
                   )
@@ -1585,6 +1743,7 @@ export class RoomManager {
       roomCode: room.code,
       playerId: player.id,
       playerToken: player.token,
+      role: "player",
       snapshot: this.snapshotForPlayer(room.code, player.token),
     };
   }
@@ -1600,6 +1759,18 @@ export class RoomManager {
       connected: true,
       isTestPlayer,
       autoManaged: false,
+    };
+  }
+
+  private createSpectator(name: string, avatar = DEFAULT_AVATAR): Spectator {
+    return {
+      id: randomUUID(),
+      token: randomUUID(),
+      name,
+      avatar: this.normalizeAvatar(avatar),
+      connected: true,
+      requestingSeat: false,
+      joinedAt: this.now(),
     };
   }
 

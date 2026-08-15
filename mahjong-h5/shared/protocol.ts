@@ -139,11 +139,21 @@ export type PlayerView = {
   autoManaged?: boolean;
 };
 
+export type SpectatorView = {
+  id: string;
+  name: string;
+  avatar: string;
+  connected: boolean;
+  requestingSeat: boolean;
+};
+
 export type RoomSnapshot = {
   roomCode: string;
   revision: number;
   phase: "waiting" | "playing";
   players: PlayerView[];
+  spectators: SpectatorView[];
+  viewerRole?: "player" | "spectator";
   scoreTotals: number[];
   publicActions: PublicActionView[];
   match: MatchView;
@@ -179,10 +189,12 @@ export type RoomSnapshot = {
 
 export type ClientMessage =
   | { type: "create_room"; name: string; avatar?: string; totalRounds?: MatchMode; startScore?: number }
-  | { type: "join_room"; roomCode: string; name: string; avatar?: string }
+  | { type: "join_room"; roomCode: string; name: string; avatar?: string; asSpectator?: boolean }
   | { type: "reconnect"; roomCode: string; playerToken: string }
   | { type: "set_ready"; ready: boolean }
   | { type: "update_avatar"; avatar: string }
+  | { type: "request_seat" }
+  | { type: "promote_spectator"; spectatorId: string }
   | { type: "fill_test_players" }
   | { type: "remove_test_players" }
   | { type: "leave_room" }
@@ -213,7 +225,7 @@ export type ServerMessage =
   | { type: "room_announcement"; message: string }
   | { type: "voice_audio"; fromSeat: number; data: string; mimeType: string }
   | { type: "voice_state"; fromSeat: number; micOn: boolean; speakerOn: boolean }
-  | { type: "chat_message"; fromSeat: number; text: string }
-  | { type: "chat_emote"; fromSeat: number; emote: string; toSeat?: number }
+  | { type: "chat_message"; fromSeat?: number; fromId: string; fromName: string; fromAvatar: string; text: string }
+  | { type: "chat_emote"; fromSeat?: number; fromId: string; fromName: string; fromAvatar: string; emote: string; toSeat?: number }
   | { type: "error"; code: string; message: string }
   | { type: "pong" };
