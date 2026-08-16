@@ -63,7 +63,13 @@ type Room = {
   };
   actionDeadlineAt?: number;
   actionStateKey?: string;
+  testPlayerAutoDueAt?: number;
   game?: InitialGameState;
+};
+
+export type RoomManagerOptions = {
+  /** 测试玩家两次出牌之间的延迟；0 表示测试环境里立即出牌。 */
+  testPlayerTurnMs?: number;
 };
 
 export type Session = {
@@ -84,12 +90,14 @@ export const DEFAULT_AVATAR = "a1";
 export const DISCARD_TIMEOUT_MS = 30_000;
 export const REACTION_TIMEOUT_MS = 12_000;
 export const AUTO_MANAGEMENT_AFTER_MS = 90_000;
+export const TEST_PLAYER_TURN_MS = 1_500;
 export const MAX_SPECTATORS = 20;
 
 export type GovernanceEvent =
   | { kind: "auto_management_started"; seat: number; offlineMs: number }
   | { kind: "turn_timed_out"; seat: number; tile: TileCode; autoManaged: boolean; deadlineAt?: number; automaticTurnCount: number }
-  | { kind: "reaction_timed_out"; seats: number[]; autoManagedSeats: number[]; deadlineAt?: number };
+  | { kind: "reaction_timed_out"; seats: number[]; autoManagedSeats: number[]; deadlineAt?: number }
+  | { kind: "test_player_auto_discard"; seat: number; tile: TileCode; dueAt: number; automaticTurnCount: number };
 
 export type GovernanceTickResult = {
   roomCode: string;
@@ -317,6 +325,7 @@ export class RoomManager {
     private readonly gameFactory: typeof createInitialGame = createInitialGame,
     private readonly now: () => number = Date.now,
     private readonly store?: RoomStore,
+    private readonly options: RoomManagerOptions = {},
   ) {}
 
   createRoom(rawName: string, totalRounds: MatchMode = 8, startScore = 100, rawAvatar?: string): Session {
@@ -592,7 +601,7 @@ export class RoomManager {
     this.recordPublicAction(room, { kind: "round_started", roundNumber: room.game.roundNumber, seat: dealerSeat });
     this.ensureActionDeadline(room, true);
     room.revision += 1;
-    return this.autoDiscardTestDealer(room) ?? this.snapshot(room.code);
+    return this.maybeAdvanceTestDealer(room) ?? this.snapshot(room.code);
   }
 
   startNextRound(rawCode: string, playerToken: string): RoomSnapshot {
@@ -632,7 +641,7 @@ export class RoomManager {
     this.recordPublicAction(room, { kind: "round_started", roundNumber: nextRoundNumber, seat: nextDealerSeat });
     this.ensureActionDeadline(room, true);
     room.revision += 1;
-    return this.autoDiscardTestDealer(room) ?? this.snapshot(room.code);
+    return this.maybeAdvanceTestDealer(room) ?? this.snapshot(room.code);
   }
 
   requestEarlySettlement(rawCode: string, playerToken: string): EarlySettlementProgress {
@@ -798,7 +807,7 @@ export class RoomManager {
       const specialType = option.kind === "specialgang" ? (parts[1] as "dragons" | "winds") : undefined;
       tile = option.kind === "specialgang" && game.lastDraw?.seat === player.seat && option.tiles.includes(game.lastDraw.tile.code)
         ? game.lastDraw.tile.code
-        : option.tiles[0];
+        : option.tiles.at(-1) ?? option.tiles[0];
       if (!tile || ((option.kind === "jiagang" || option.kind === "zhangmao") && !Number.isInteger(meldIndex))) {
         throw new Error("可抢杠操作状态不一致");
       }
@@ -848,7 +857,10 @@ export class RoomManager {
       }
     }
 
-    if (meld && option.kind !== "zimo") this.recordKongPayments(room, player.seat, option.kind);
+    if (meld && option.kind !== "zimo") {
+      const growthCount = option.kind === "specialgang" && meld.kind === "special_gang" ? (meld.growthCount ?? 0) : 0;
+      this.recordKongPayments(room, player.seat, option.kind, growthCount);
+    }
 
     this.updateMatchAfterRound(room);
     if (option.kind === "zimo") {
@@ -1032,7 +1044,26 @@ export class RoomManager {
       const expired = deadlineAt !== undefined && deadlineAt <= now;
       if (game.stage === "awaiting_discard") {
         const player = room.players.find((candidate) => candidate.seat === game.turnSeat);
-        if (player && (player.autoManaged || expired)) {
+        const testDueAt = room.testPlayerAutoDueAt;
+        if (player?.isTestPlayer) {
+          if (testDueAt === undefined) {
+            this.scheduleTestPlayer(room);
+          } else if (testDueAt <= now) {
+            const hand = game.hands.get(player.seat) ?? [];
+            const tile = game.lastDraw?.seat === player.seat
+              ? game.lastDraw.tile.code
+              : sortTiles(hand).at(-1)?.code;
+            if (!tile) throw new Error("测试玩家自动出牌时没有手牌");
+            const progress = this.discardTile(room.code, player.token, tile);
+            events.push({
+              kind: "test_player_auto_discard",
+              seat: player.seat,
+              tile,
+              dueAt: testDueAt,
+              automaticTurnCount: progress.diagnostics.autoDiscards.length,
+            });
+          }
+        } else if (player && (player.autoManaged || expired)) {
           const hand = game.hands.get(player.seat) ?? [];
           const tile = game.lastDraw?.seat === player.seat
             ? game.lastDraw.tile.code
@@ -1439,6 +1470,22 @@ export class RoomManager {
     };
   }
 
+  private maybeAdvanceTestDealer(room: Room): RoomSnapshot | undefined {
+    if ((this.options.testPlayerTurnMs ?? 0) > 0) {
+      this.scheduleTestPlayer(room);
+      return undefined;
+    }
+    return this.autoDiscardTestDealer(room);
+  }
+
+  private scheduleTestPlayer(room: Room): void {
+    const game = room.game;
+    if (!game || game.stage !== "awaiting_discard") return;
+    const player = room.players.find((candidate) => candidate.seat === game.turnSeat);
+    if (!player?.isTestPlayer) return;
+    room.testPlayerAutoDueAt = this.now() + (this.options.testPlayerTurnMs ?? TEST_PLAYER_TURN_MS);
+  }
+
   private autoDiscardTestDealer(room: Room): RoomSnapshot | undefined {
     const game = room.game;
     if (!game || game.stage !== "awaiting_discard") return undefined;
@@ -1458,6 +1505,7 @@ export class RoomManager {
   ): void {
     const game = room.game;
     if (!game) throw new Error("牌局状态不存在");
+    room.testPlayerAutoDueAt = undefined;
     let discard = initialDiscard;
     let reactionResolved = initialReactionResolved;
 
@@ -1499,6 +1547,10 @@ export class RoomManager {
       const nextPlayer = room.players.find((candidate) => candidate.seat === nextSeat);
       if (!nextPlayer) throw new Error("下一回合玩家不存在");
       if (!nextPlayer.isTestPlayer) return;
+      if ((this.options.testPlayerTurnMs ?? 0) > 0) {
+        this.scheduleTestPlayer(room);
+        return;
+      }
 
       const testHand = game.hands.get(nextSeat);
       const automaticTile = testHand?.pop();
@@ -1558,13 +1610,17 @@ export class RoomManager {
       meld = original;
     } else if (pendingKong.type === "specialgang") {
       if (!pendingKong.specialType) throw new Error("特殊杠类型不存在");
+      const allTiles = pendingKong.tiles.map((tile) => tile.code);
+      const growthCount = pendingKong.specialType === "winds"
+        ? Math.max(0, allTiles.length - 4)
+        : Math.max(0, allTiles.length - 3);
       meld = {
         seat: pendingKong.seat,
         kind: "special_gang",
-        tiles: pendingKong.tiles.map((tile) => tile.code),
+        tiles: allTiles,
         fromSeat: pendingKong.seat,
         specialType: pendingKong.specialType,
-        growthCount: 0,
+        growthCount,
       };
       playerMelds.push(meld);
     } else {
@@ -1578,7 +1634,15 @@ export class RoomManager {
     game.pendingReaction = undefined;
     game.lastDraw = undefined;
     game.turnSeat = pendingKong.seat;
-    drawTileFromWallEnd(game, pendingKong.seat);
+    if (pendingKong.type === "specialgang") {
+      const replacementCount = Math.max(0, pendingKong.tiles.length - 3);
+      for (let growth = 0; growth < replacementCount; growth += 1) {
+        drawTileFromWallEnd(game, pendingKong.seat);
+      }
+      game.stage = "awaiting_discard";
+    } else {
+      drawTileFromWallEnd(game, pendingKong.seat);
+    }
     return meld;
   }
 
@@ -1656,6 +1720,7 @@ export class RoomManager {
     room: Room,
     seat: number,
     operation: "gang" | "angang" | "jiagang" | "specialgang" | "zhangmao",
+    growthCount = 0,
   ): void {
     const reason = operation === "gang"
       ? "ming_gang"
@@ -1667,6 +1732,9 @@ export class RoomManager {
             ? "special_gang"
             : "zhangmao";
     this.recordPayments(room, calculateKongPayments(seat, reason));
+    for (let growth = 0; growth < growthCount; growth += 1) {
+      this.recordPayments(room, calculateKongPayments(seat, "zhangmao"));
+    }
   }
 
   private recordPayments(room: Room, payments: readonly ScorePaymentView[]): void {

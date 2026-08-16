@@ -89,7 +89,7 @@ pnpm test
 pnpm run build
 ```
 
-自动测试应全部通过，当前版本为 `persist-control-v17`。
+自动测试应全部通过，当前版本为 `ui-voice-v18`。
 
 ## 5. 使用 PM2 启动并开机自启
 
@@ -155,21 +155,21 @@ ufw allow 3000/tcp comment 'CMCC mahjong'
 curl -s http://127.0.0.1:3000/healthz
 ```
 
-应返回 `"modelVersion":"persist-control-v17"`、`"persistence":"redis"`、8位 `instanceId` 和运行秒数。
+应返回 `"modelVersion":"ui-voice-v18"`、`"persistence":"redis"`、8位 `instanceId` 和运行秒数。
 
 后台管理使用令牌保护：
 
 ```bash
-ADMIN_TOKEN=你的后台令牌 node scripts/admin-smoke.mjs http://127.0.0.1:3000 你的后台令牌 persist-control-v17
+ADMIN_TOKEN=你的后台令牌 node scripts/admin-smoke.mjs http://127.0.0.1:3000 你的后台令牌 ui-voice-v18
 ```
 
 从公司电脑对公网服务执行完整冒烟：
 
 ```bash
 cd mahjong-h5
-node scripts/websocket-smoke.mjs ws://服务器公网IP:3000/ws persist-control-v17
-node scripts/admin-smoke.mjs http://服务器公网IP:3000 你的后台令牌 persist-control-v17
-node scripts/full-round-smoke.mjs ws://服务器公网IP:3000/ws persist-control-v17
+node scripts/websocket-smoke.mjs ws://服务器公网IP:3000/ws ui-voice-v18
+node scripts/admin-smoke.mjs http://服务器公网IP:3000 你的后台令牌 ui-voice-v18
+node scripts/full-round-smoke.mjs ws://服务器公网IP:3000/ws ui-voice-v18
 ```
 
 后台冒烟会额外验证管理员公告送达和强制解散后房间清空。手机访问：

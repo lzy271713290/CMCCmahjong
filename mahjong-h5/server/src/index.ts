@@ -5,7 +5,7 @@ import { extname, isAbsolute, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { ClientMessage, ServerMessage } from "../../shared/protocol.js";
-import { RoomError, RoomManager, type Session } from "./room-manager.js";
+import { RoomError, RoomManager, TEST_PLAYER_TURN_MS, type Session } from "./room-manager.js";
 import { RoomStore } from "./room-store.js";
 import { instanceId, logError, logInfo, logWarn, shortId } from "./logger.js";
 import { GAME_MODEL_VERSION } from "./game-model.js";
@@ -13,7 +13,7 @@ import { GAME_MODEL_VERSION } from "./game-model.js";
 const port = Number(process.env.PORT ?? process.argv[2] ?? 3000);
 const adminToken = process.env.ADMIN_TOKEN;
 const roomStore = new RoomStore(process.env.REDIS_URL);
-const manager = new RoomManager(undefined, undefined, undefined, roomStore);
+const manager = new RoomManager(undefined, undefined, undefined, roomStore, { testPlayerTurnMs: TEST_PLAYER_TURN_MS });
 const socketsByToken = new Map<string, WebSocket>();
 const sessionsBySocket = new Map<WebSocket, { roomCode: string; playerToken: string; seat?: number }>();
 const projectRoot = fileURLToPath(new URL("../../..", import.meta.url));
@@ -854,6 +854,18 @@ const governanceTimer = setInterval(() => {
             tile: event.tile,
             autoManaged: event.autoManaged,
             deadlineAt: event.deadlineAt,
+            automaticTurnCount: event.automaticTurnCount,
+            nextTurnSeat: result.snapshot.game?.turnSeat,
+            stage: result.snapshot.game?.stage,
+            wallRemaining: result.snapshot.game?.wallRemaining,
+            revision: result.snapshot.revision,
+          });
+        } else if (event.kind === "test_player_auto_discard") {
+          logInfo("test_player_auto_discard", {
+            roomCode: result.roomCode,
+            seat: event.seat,
+            tile: event.tile,
+            dueAt: event.dueAt,
             automaticTurnCount: event.automaticTurnCount,
             nextTurnSeat: result.snapshot.game?.turnSeat,
             stage: result.snapshot.game?.stage,

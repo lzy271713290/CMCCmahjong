@@ -2083,10 +2083,9 @@ function fitTableToViewport(): void {
   if (!tableBoard) return;
   const width = window.visualViewport?.width ?? window.innerWidth;
   const height = window.visualViewport?.height ?? window.innerHeight;
-  const scale = Math.max(0.4, Math.min(1, Math.min(width / 720, height / 390)));
-  const fillsViewport = width >= 720 && height >= 390 && scale >= 1;
-  const offsetX = fillsViewport ? 0 : (width - 720 * scale) / 2;
-  const offsetY = fillsViewport ? 0 : (height - 390 * scale) / 2;
+  const scale = Math.max(0.4, Math.min(2, Math.min(width / 720, height / 390)));
+  const offsetX = (width - 720 * scale) / 2;
+  const offsetY = (height - 390 * scale) / 2;
   tableBoard.style.setProperty("--table-scale", String(scale));
   tableBoard.style.setProperty("--table-offset-x", `${offsetX}px`);
   tableBoard.style.setProperty("--table-offset-y", `${offsetY}px`);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { TileCode } from "../../shared/protocol.js";
+import type { MeldView, TileCode } from "../../shared/protocol.js";
 import {
   analyzeWinningHand,
   canWinCompleteHand,
@@ -223,6 +223,86 @@ test("特殊杠按一个有杠面子参与胡牌并豁免一九与刻子", () =>
     growthCount: 0,
   }];
   assert.equal(canWinCompleteHand(concealed, specialMeld), true);
+});
+
+test("三组落地面子加手中中发白成组可以胡牌并豁免一九与刻子", () => {
+  const hand = makeTiles(["wan-3", "wan-3", "red", "green"]);
+  const melds = [
+    { seat: 0, kind: "chi" as const, tiles: ["wan-1", "wan-2", "wan-3"] as TileCode[], fromSeat: 1 },
+    { seat: 0, kind: "chi" as const, tiles: ["tong-1", "tong-2", "tong-3"] as TileCode[], fromSeat: 2 },
+    { seat: 0, kind: "chi" as const, tiles: ["tiao-1", "tiao-2", "tiao-3"] as TileCode[], fromSeat: 3 },
+  ];
+  const analysis = analyzeWinningHand(hand, "white", melds);
+  assert.equal(analysis.valid, true);
+  assert.equal(analysis.isPengPengHu, false);
+  assert.equal(analysis.isSanBuLao, false);
+});
+
+test("三组落地刻子加手中中发白成组保持三不烙", () => {
+  const hand = makeTiles(["wan-9", "wan-9", "red", "green"]);
+  const melds = [
+    { seat: 0, kind: "peng" as const, tiles: ["wan-1", "wan-1", "wan-1"] as TileCode[], fromSeat: 1 },
+    { seat: 0, kind: "peng" as const, tiles: ["tong-2", "tong-2", "tong-2"] as TileCode[], fromSeat: 2 },
+    { seat: 0, kind: "peng" as const, tiles: ["tiao-3", "tiao-3", "tiao-3"] as TileCode[], fromSeat: 3 },
+  ];
+  const analysis = analyzeWinningHand(hand, "white", melds);
+  assert.equal(analysis.valid, true);
+  assert.equal(analysis.isSanBuLao, true);
+});
+
+test("中发白成组可豁免一九与刻子但仍不能缺门", () => {
+  const hand = makeTiles(["wan-9", "wan-9", "red", "green"]);
+  const melds = [
+    { seat: 0, kind: "chi" as const, tiles: ["wan-1", "wan-2", "wan-3"] as TileCode[], fromSeat: 1 },
+    { seat: 0, kind: "chi" as const, tiles: ["wan-4", "wan-5", "wan-6"] as TileCode[], fromSeat: 2 },
+    { seat: 0, kind: "chi" as const, tiles: ["wan-7", "wan-8", "wan-9"] as TileCode[], fromSeat: 3 },
+  ];
+  assert.equal(analyzeWinningHand(hand, "white", melds).valid, false);
+  assert.equal(canWinWithDiscard(hand, "white", melds), false);
+});
+
+test("东南西北四张不能作为成组参与胡牌", () => {
+  const hand = makeTiles(["wan-3", "wan-3", "east", "south", "west", "north"]);
+  const melds = [
+    { seat: 0, kind: "chi" as const, tiles: ["wan-1", "wan-2", "wan-3"] as TileCode[], fromSeat: 1 },
+    { seat: 0, kind: "chi" as const, tiles: ["tong-1", "tong-2", "tong-3"] as TileCode[], fromSeat: 2 },
+    { seat: 0, kind: "chi" as const, tiles: ["tiao-1", "tiao-2", "tiao-3"] as TileCode[], fromSeat: 3 },
+  ];
+  assert.equal(analyzeWinningHand(hand, "white", melds).valid, false);
+  assert.equal(canWinWithDiscard(hand, "white", melds), false);
+});
+
+test("中发白成组后手牌满足3n加1，n可以为0", () => {
+  const meldSets: MeldView[][] = [
+    [],
+    [
+      { seat: 0, kind: "chi" as const, tiles: ["tiao-1", "tiao-2", "tiao-3"] as TileCode[], fromSeat: 1 },
+    ],
+    [
+      { seat: 0, kind: "chi" as const, tiles: ["tiao-1", "tiao-2", "tiao-3"] as TileCode[], fromSeat: 1 },
+      { seat: 0, kind: "peng" as const, tiles: ["tong-2", "tong-2", "tong-2"] as TileCode[], fromSeat: 2 },
+    ],
+    [
+      { seat: 0, kind: "chi" as const, tiles: ["tiao-1", "tiao-2", "tiao-3"] as TileCode[], fromSeat: 1 },
+      { seat: 0, kind: "peng" as const, tiles: ["tong-2", "tong-2", "tong-2"] as TileCode[], fromSeat: 2 },
+      { seat: 0, kind: "gang" as const, gangType: "ming" as const, tiles: ["wan-1", "wan-1", "wan-1", "wan-1"] as TileCode[], fromSeat: 3 },
+    ],
+  ];
+  const hiddenSequences: TileCode[][] = [
+    ["wan-1", "wan-2", "wan-3"],
+    ["tong-1", "tong-2", "tong-3"],
+    ["tiao-1", "tiao-2", "tiao-3"],
+  ];
+  for (let exposedCount = 0; exposedCount <= 3; exposedCount += 1) {
+    const melds = meldSets[exposedCount]!;
+    const sequences = hiddenSequences.slice(0, 4 - melds.length - 1).flat();
+    const base: TileCode[] = [...sequences, "wan-9", "wan-9"];
+    const hand = makeTiles([...base, "red", "green"]);
+    const withWhite = makeTiles([...base, "red", "green", "white"]);
+    assert.equal(hand.length, (4 - melds.length) * 3 + 1);
+    assert.equal(withWhite.length, (4 - melds.length) * 3 + 2);
+    assert.equal(analyzeWinningHand(withWhite, undefined, melds).valid, true);
+  }
 });
 
 test("胡牌分析识别闭门和碰碰胡，但手牌暗刻不计入三不烙", () => {

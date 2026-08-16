@@ -241,6 +241,16 @@ export function findTurnOperationOptions(
   >) {
     if (!melds.some((meld) => meld.kind === "special_gang" && meld.specialType === specialType) && requiredCodes.every((code) => (counts.get(code) ?? 0) > 0)) {
       options.push({ id: `specialgang:${specialType}`, kind: "specialgang", tiles: [...requiredCodes] });
+      const extraCount = requiredCodes.reduce((sum, code) => sum + Math.max(0, (counts.get(code) ?? 0) - 1), 0);
+      if (extraCount > 0) {
+        const extraTile = requiredCodes.find((code) => (counts.get(code) ?? 0) > 1) ?? requiredCodes[0]!;
+        const extraTiles = Array.from({ length: extraCount }, () => extraTile);
+        options.push({
+          id: `specialgang:${specialType}:${requiredCodes.length + extraCount}`,
+          kind: "specialgang",
+          tiles: [...requiredCodes, ...extraTiles],
+        });
+      }
     }
   }
   melds.forEach((meld, meldIndex) => {
@@ -283,7 +293,9 @@ export function analyzeWinningHand(hand: readonly Tile[], incoming: TileCode | u
 }
 
 function analyzeWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[]): WinningAnalysis {
-  const invalid = (): WinningAnalysis => ({ valid: false, isSevenPairs: false, isClosed: isClosedHand(melds), isPengPengHu: false, isSanBuLao: false });
+  const invalid = (): WinningAnalysis => {
+    return { valid: false, isSevenPairs: false, isClosed: isClosedHand(melds), isPengPengHu: false, isSanBuLao: false };
+  };
   const allCodes = concealedCodes.concat(melds.flatMap((meld) => meld.tiles));
   if (!NUMBERED_SUITS.every((suit) => allCodes.some((code) => code.startsWith(`${suit}-`)))) return invalid();
 
@@ -291,7 +303,14 @@ function analyzeWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[])
     return { valid: true, isSevenPairs: true, isClosed: true, isPengPengHu: false, isSanBuLao: false };
   }
   const groupsNeeded = 4 - melds.length;
-  if (groupsNeeded < 0 || concealedCodes.length !== groupsNeeded * 3 + 2) return invalid();
+  const concealedDragonGroup = SPECIAL_GANGS.dragons.every((code) => concealedCodes.includes(code));
+  const handGroupsNeeded = groupsNeeded - (concealedDragonGroup ? 1 : 0);
+  const nonDragonCodes = concealedDragonGroup
+    ? concealedCodes.filter((code) => !(SPECIAL_GANGS.dragons as readonly TileCode[]).includes(code))
+    : concealedCodes;
+  if (groupsNeeded < 0 || nonDragonCodes.length !== handGroupsNeeded * 3 + 2) {
+    return invalid();
+  }
 
   const exposed = melds.reduce(
     (stats, meld) => {
@@ -308,30 +327,32 @@ function analyzeWinCodes(concealedCodes: TileCode[], melds: readonly MeldView[])
     },
     { hasGang: false, hasTriplet: false, hasHonorTriplet: false, hasTerminalMeld: false, hasSpecialGang: false, tripletCount: 0, sequenceCount: 0 },
   );
-  const counts = countCodes(concealedCodes);
+  const counts = countCodes(nonDragonCodes);
   const validDecompositions: GroupStats[] = [];
 
   for (const [pairCode, count] of counts) {
     if (count < 2) continue;
     counts.set(pairCode, count - 2);
-    const decompositions = collectGroupStats(counts, groupsNeeded);
+    const decompositions = collectGroupStats(counts, handGroupsNeeded);
     counts.set(pairCode, count);
     validDecompositions.push(
       ...decompositions.filter((closed) => {
-        const hasGang = exposed.hasGang;
+        const hasGang = exposed.hasGang || concealedDragonGroup;
         const terminalSatisfied = hasGang || exposed.hasTerminalMeld || exposed.hasHonorTriplet || closed.hasTerminalMeld || closed.hasHonorTriplet;
         const tripletSatisfied = hasGang || exposed.hasTriplet || closed.hasTriplet;
         return terminalSatisfied && tripletSatisfied;
       }),
     );
   }
-  if (validDecompositions.length === 0) return invalid();
+  if (validDecompositions.length === 0) {
+    return invalid();
+  }
   return {
     valid: true,
     isSevenPairs: false,
     isClosed: isClosedHand(melds),
     isPengPengHu: validDecompositions.some(
-      (closed) => !exposed.hasSpecialGang && exposed.sequenceCount === 0 && closed.sequenceCount === 0,
+      (closed) => !exposed.hasSpecialGang && !concealedDragonGroup && exposed.sequenceCount === 0 && closed.sequenceCount === 0,
     ),
     isSanBuLao: exposed.tripletCount >= 3,
   };
