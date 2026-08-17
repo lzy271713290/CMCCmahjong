@@ -998,17 +998,23 @@ function renderWalls(remaining: number): void {
     const wall = required<HTMLElement>(`wall-${position}`);
     wall.replaceChildren();
     const count = baseCount + (wallIndex < extraCount ? 1 : 0);
+    const isSide = position === "left" || position === "right";
     const deck = document.createElement("div");
-    deck.className = "wall-deck";
+    deck.className = isSide ? "wall-deck wall-deck-side" : "wall-deck";
     const farCount = Math.ceil(count / 2);
     const nearCount = count - farCount;
     const farRow = document.createElement("div");
-    farRow.className = "wall-row wall-row-far";
+    farRow.className = isSide ? "wall-row wall-row-far wall-row-side" : "wall-row wall-row-far";
     for (let tileIndex = 0; tileIndex < farCount; tileIndex += 1) farRow.append(createTileBack());
     const nearRow = document.createElement("div");
-    nearRow.className = "wall-row wall-row-near";
+    nearRow.className = isSide ? "wall-row wall-row-near wall-row-side" : "wall-row wall-row-near";
     for (let tileIndex = 0; tileIndex < nearCount; tileIndex += 1) nearRow.append(createTileBack());
-    deck.append(farRow, nearRow);
+    if (isSide) {
+      if (position === "left") deck.append(nearRow, farRow);
+      else deck.append(farRow, nearRow);
+    } else {
+      deck.append(farRow, nearRow);
+    }
     wall.append(deck);
   });
 }
@@ -1152,6 +1158,14 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
     const lastDiscard = after.discards.length > before.discards.length ? after.discards[after.discards.length - 1] : undefined;
     const seat = drawnSeat ?? lastDiscard?.seat ?? after.dealerSeat;
     const viewerSeat = after.viewerSeat ?? next.players.find((player) => player.id === saved?.playerId)?.seat ?? 0;
+    const drawnPosition = positionForSeat(seat, viewerSeat);
+    const consumedWall = document.getElementById(`wall-${drawnPosition}`);
+    if (consumedWall) {
+      consumedWall.classList.remove("wall-shrink");
+      void consumedWall.offsetWidth;
+      consumedWall.classList.add("wall-shrink");
+      window.setTimeout(() => consumedWall.classList.remove("wall-shrink"), 600);
+    }
     playDrawEffect(seat, viewerSeat, seat === after.viewerSeat ? after.selfDrawnTile : undefined);
   }
 
