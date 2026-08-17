@@ -51,6 +51,7 @@ const gameMatchProgress = required<HTMLElement>("game-match-progress");
 const roundLabel = required<HTMLElement>("round-label");
 const tableSeats = required<HTMLElement>("table-seats");
 const selfHand = required<HTMLElement>("self-hand");
+const selfMeldRack = required<HTMLElement>("self-melds");
 const wallStatus = required<HTMLElement>("wall-status");
 const turnStatus = required<HTMLElement>("turn-status");
 const centerConsole = required<HTMLElement>("center-console");
@@ -391,6 +392,7 @@ function renderWaitingTable(next: RoomSnapshot, me: PlayerView | undefined, spec
   waitingControls.classList.remove("hidden");
   const viewerSeat = me?.seat ?? 0;
   tableSeats.replaceChildren();
+  selfMeldRack.replaceChildren();
   for (let seat = 0; seat < 4; seat += 1) {
     const player = next.players.find((candidate) => candidate.seat === seat);
     const position = positionForSeat(seat, viewerSeat);
@@ -565,6 +567,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
 function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
   const game = next.game!;
   tableSeats.replaceChildren();
+  selfMeldRack.replaceChildren();
   for (const player of next.players) {
     const position = positionForSeat(player.seat, viewerSeat);
     const playerSeat = document.createElement("div");
@@ -652,7 +655,11 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
         }
         meldRack.append(group);
       }
-      playerSeat.append(meldRack);
+      if (position === "bottom") {
+        selfMeldRack.append(meldRack);
+      } else {
+        playerSeat.append(meldRack);
+      }
     }
     tableSeats.append(playerSeat);
   }
@@ -991,8 +998,54 @@ function renderWalls(remaining: number): void {
     const wall = required<HTMLElement>(`wall-${position}`);
     wall.replaceChildren();
     const count = baseCount + (wallIndex < extraCount ? 1 : 0);
-    for (let tileIndex = 0; tileIndex < count; tileIndex += 1) wall.append(createTileBack());
+    const deck = document.createElement("div");
+    deck.className = "wall-deck";
+    const farCount = Math.ceil(count / 2);
+    const nearCount = count - farCount;
+    const farRow = document.createElement("div");
+    farRow.className = "wall-row wall-row-far";
+    for (let tileIndex = 0; tileIndex < farCount; tileIndex += 1) farRow.append(createTileBack());
+    const nearRow = document.createElement("div");
+    nearRow.className = "wall-row wall-row-near";
+    for (let tileIndex = 0; tileIndex < nearCount; tileIndex += 1) nearRow.append(createTileBack());
+    deck.append(farRow, nearRow);
+    wall.append(deck);
   });
+}
+
+function playDrawEffect(seat: number, viewerSeat: number, drawnTile?: TileCode): void {
+  if (!tableBoard) return;
+  const position = positionForSeat(seat, viewerSeat);
+  const wall = document.getElementById(`wall-${position}`);
+  const target = position === "bottom"
+    ? selfHand
+    : document.querySelector<HTMLElement>(`.seat-${position} .opponent-rack`);
+  if (!wall || !target) return;
+  const boardRect = tableBoard.getBoundingClientRect();
+  const wallRect = wall.getBoundingClientRect();
+  const targetRect = target.getBoundingClientRect();
+  if (boardRect.width === 0 || boardRect.height === 0) return;
+  const scaleX = boardRect.width / 720;
+  const scaleY = boardRect.height / 390;
+  const startX = (wallRect.left + wallRect.width / 2 - boardRect.left) / scaleX;
+  const startY = (wallRect.top + wallRect.height / 2 - boardRect.top) / scaleY;
+  const endX = (targetRect.left + targetRect.width / 2 - boardRect.left) / scaleX;
+  const endY = (targetRect.top + targetRect.height / 2 - boardRect.top) / scaleY;
+  const effect = document.createElement("div");
+  effect.className = `draw-effect draw-effect-${position}`;
+  const hand = document.createElement("span");
+  hand.className = "draw-hand";
+  hand.setAttribute("aria-hidden", "true");
+  hand.textContent = "🖐️";
+  const tile = drawnTile ? createFaceTile(drawnTile, "hand", false) : createTileBack();
+  tile.classList.add("draw-tile");
+  effect.append(hand, tile);
+  effect.style.setProperty("--fx-sx", `${startX}px`);
+  effect.style.setProperty("--fx-sy", `${startY}px`);
+  effect.style.setProperty("--fx-ex", `${endX}px`);
+  effect.style.setProperty("--fx-ey", `${endY}px`);
+  tableBoard.append(effect);
+  window.setTimeout(() => effect.remove(), 1100);
 }
 
 function renderDiscards(discards: Array<{ seat: number; tile: TileCode }>, viewerSeat: number): void {
@@ -1092,6 +1145,14 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
   if (after.roundNumber !== before.roundNumber) {
     enqueueFeedback({ text: `第${after.roundNumber}局开始 · ${playerName(next, after.dealerSeat)}坐庄`, kind: "round", sound: "shuffle", visual: "round", seat: after.dealerSeat });
     return;
+  }
+
+  if (after.wallRemaining < (before.wallRemaining ?? 0)) {
+    const drawnSeat = after.stage === "awaiting_discard" ? after.turnSeat : undefined;
+    const lastDiscard = after.discards.length > before.discards.length ? after.discards[after.discards.length - 1] : undefined;
+    const seat = drawnSeat ?? lastDiscard?.seat ?? after.dealerSeat;
+    const viewerSeat = after.viewerSeat ?? next.players.find((player) => player.id === saved?.playerId)?.seat ?? 0;
+    playDrawEffect(seat, viewerSeat, seat === after.viewerSeat ? after.selfDrawnTile : undefined);
   }
 
   const oldMelds = new Map(before.melds.map((meld, index) => [`${meld.seat}:${index}`, JSON.stringify(meld)]));
