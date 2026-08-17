@@ -1,4 +1,4 @@
-import type { PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ScoreFactor, ScorePaymentView, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
+import type { MeldView, PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ScoreFactor, ScorePaymentView, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
 import { MahjongAudioManager, type ActionVoice, type AudioMonitorEvent, type EffectSound, type VoiceGender } from "./audio-manager.js";
 import { VoiceChannel } from "./voice-channel.js";
 import { PUBLIC_REPLAY_FORMAT, parsePublicReplay, type PublicReplayPlayer, type PublicReplayRecord } from "./public-replay.js";
@@ -1169,9 +1169,19 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
     playDrawEffect(seat, viewerSeat, seat === after.viewerSeat ? after.selfDrawnTile : undefined);
   }
 
-  const oldMelds = new Map(before.melds.map((meld, index) => [`${meld.seat}:${index}`, JSON.stringify(meld)]));
-  after.melds.forEach((meld, index) => {
-    if (oldMelds.get(`${meld.seat}:${index}`) === JSON.stringify(meld)) return;
+  const meldIdentity = (meld: MeldView): string => `${meld.seat}|${meld.kind}|${meld.fromSeat}|${meld.gangType ?? ""}|${meld.specialType ?? ""}|${meld.growthCount ?? 0}|${meld.hiddenTileCount ?? 0}|${meld.tiles.join(",")}`;
+  const beforeMeldCounts = new Map<string, number>();
+  for (const meld of before.melds) {
+    const key = meldIdentity(meld);
+    beforeMeldCounts.set(key, (beforeMeldCounts.get(key) ?? 0) + 1);
+  }
+  after.melds.forEach((meld) => {
+    const key = meldIdentity(meld);
+    const matched = beforeMeldCounts.get(key) ?? 0;
+    if (matched > 0) {
+      beforeMeldCounts.set(key, matched - 1);
+      return;
+    }
     const isChi = meld.kind === "chi";
     const isPeng = meld.kind === "peng";
     const label = isChi ? "吃" : isPeng ? "碰" : meld.kind === "special_gang" ? meld.growthCount ? "涨毛" : "特殊杠" : "杠";
