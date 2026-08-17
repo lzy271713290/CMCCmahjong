@@ -635,8 +635,7 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     }
     const playerMelds = game.melds.filter((meld) => meld.seat === player.seat);
     if (playerMelds.length > 0) {
-      const meldRack = document.createElement("div");
-      meldRack.className = "meld-rack";
+      const groups: HTMLElement[] = [];
       for (const meld of playerMelds) {
         const group = document.createElement("div");
         group.className = "meld-group";
@@ -653,11 +652,14 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
           back.classList.add("meld-back");
           group.append(back);
         }
-        meldRack.append(group);
+        groups.push(group);
       }
       if (position === "bottom") {
-        selfMeldRack.append(meldRack);
+        selfMeldRack.append(...groups);
       } else {
+        const meldRack = document.createElement("div");
+        meldRack.className = "meld-rack";
+        meldRack.append(...groups);
         playerSeat.append(meldRack);
       }
     }

@@ -371,7 +371,7 @@ body.in-game .shell { display: none; }
 .dissolve-overlay strong { color: #ffd297; font-size: 19px; }
 .dissolve-overlay span { color: #e2cbbb; font-size: 11px; }
 
-.self-area { position: absolute; z-index: 25; right: 12%; bottom: 1%; left: 24%; display: flex; align-items: flex-end; justify-content: center; gap: 6px; }
+.self-area { position: absolute; z-index: 25; right: 12%; bottom: 1%; left: 24%; display: flex; align-items: flex-end; justify-content: center; gap: 12px; }
 .self-hand { display: flex; flex: 0 0 auto; align-items: flex-end; justify-content: center; gap: 1px; min-height: 48px; filter: drop-shadow(0 8px 7px rgba(0,0,0,.42)); }
 .tile-shell { position: relative; display: block; flex: 0 0 auto; overflow: visible; padding: 0; border: 0; border-radius: 4px; background: transparent; }
 button.tile-shell { width: auto; color: inherit; cursor: pointer; }
