@@ -170,6 +170,7 @@ export type RoomSnapshot = {
     viewerSeat?: number;
     selfHand?: TileCode[];
     selfDrawnTile?: TileCode;
+    selfDiscardRestrictedTile?: TileCode;
     latestDiscard?: DiscardView;
     discards: DiscardView[];
     melds: MeldView[];

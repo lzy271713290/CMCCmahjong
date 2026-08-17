@@ -349,6 +349,45 @@ function createDeterministicFourPlayerGame(): { rooms: RoomManager; sessions: Se
   return { rooms, sessions, started };
 }
 
+function createChiRestrictionGame(): InitialGameState {
+  const pool = createFullTileSet();
+  const take = (code: Tile["code"]): Tile => {
+    const index = pool.findIndex((tile) => tile.code === code);
+    if (index < 0) throw new Error(`测试牌池缺少 ${code}`);
+    return pool.splice(index, 1)[0]!;
+  };
+  const dealerHand = [
+    "wan-5", "wan-1", "wan-2", "wan-3",
+    "tong-1", "tong-2", "tong-3",
+    "tiao-1", "tiao-2", "tiao-3",
+    "wan-9", "wan-9", "wan-9",
+    "east",
+  ].map((code) => take(code as Tile["code"]));
+  const chiPlayerHand = [
+    "wan-4", "wan-6", "wan-5",
+    "tong-4", "tong-5", "tong-6",
+    "tiao-4", "tiao-5", "tiao-6",
+    "wan-8", "wan-8", "wan-8",
+    "south",
+  ].map((code) => take(code as Tile["code"]));
+  const game: InitialGameState = {
+    modelVersion: GAME_MODEL_VERSION,
+    roundNumber: 1,
+    dealerSeat: 0,
+    turnSeat: 0,
+    stage: "awaiting_discard",
+    hands: new Map([[0, dealerHand], [1, chiPlayerHand], [2, pool.splice(0, 13)], [3, pool.splice(0, 13)]]),
+    wall: pool,
+    discards: [],
+    melds: new Map([[0, []], [1, []], [2, []], [3, []]]),
+    scorePayments: [],
+    scoreDeltas: [0, 0, 0, 0],
+    lastDraw: { seat: 0, tile: dealerHand.at(-1)! },
+  };
+  validateInitialGame(game);
+  return game;
+}
+
 function createTimedFourPlayerGame(): { rooms: RoomManager; sessions: Session[]; started: RoomSnapshot; setNow: (value: number) => void } {
   let now = 1_000_000;
   const rooms = new RoomManager(() => 0, createInitialGame, () => now);
@@ -469,6 +508,26 @@ test("吃牌成功后移除弃牌和两张手牌并由吃牌者直接出牌", ()
   assert.equal(claimed.snapshot.game?.handTileCounts[1], 11);
   assert.deepEqual(claimed.snapshot.game?.melds, [{ seat: 1, kind: "chi", tiles: ["wan-1", "wan-2", "wan-3"], fromSeat: 0 }]);
   assert.equal(claimed.snapshot.game?.wallRemaining, 83);
+});
+
+test("吃牌后本回合不能打出刚吃进来的那张牌", () => {
+  const { rooms, sessions, started } = startCustomGame(createChiRestrictionGame);
+  rooms.discardTile(started.roomCode, sessions[0]!.playerToken, "wan-5");
+  const chiView = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+  const chi = chiView.game!.availableOperations!.find((option) => option.kind === "chi")!;
+  const claimed = rooms.reactToDiscard(started.roomCode, sessions[1]!.playerToken, chi.id);
+
+  assert.equal(claimed.diagnostics.resolution, "meld_claimed");
+  assert.equal(claimed.snapshot.game?.turnSeat, 1);
+  const afterChi = rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken);
+  assert.equal(afterChi.game?.selfDiscardRestrictedTile, "wan-5");
+  assert.throws(
+    () => rooms.discardTile(started.roomCode, sessions[1]!.playerToken, "wan-5"),
+    (error) => error instanceof RoomError && error.code === "CHI_DISCARD_RESTRICTED",
+  );
+
+  const discarded = rooms.discardTile(started.roomCode, sessions[1]!.playerToken, "tong-4");
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, sessions[1]!.playerToken).game?.selfDiscardRestrictedTile, undefined);
 });
 
 test("明杠从牌墙尾部补牌并把出牌权交给杠牌者", () => {

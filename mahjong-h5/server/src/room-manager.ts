@@ -717,8 +717,12 @@ export class RoomManager {
     const hand = room.game.hands.get(player.seat);
     const tileIndex = hand?.findIndex((tile) => tile.code === tileCode) ?? -1;
     if (!hand || tileIndex < 0) throw new RoomError("TILE_NOT_IN_HAND", "你的手牌中没有这张牌");
+    if (room.game.discardRestriction?.seat === player.seat && room.game.discardRestriction.tile === tileCode) {
+      throw new RoomError("CHI_DISCARD_RESTRICTED", "刚吃的这张牌本回合不能打出");
+    }
 
     hand.splice(tileIndex, 1);
+    if (room.game.discardRestriction?.seat === player.seat) room.game.discardRestriction = undefined;
     const initialHandTileCount = hand.length;
     room.game.discards.push({ seat: player.seat, tile: tileCode });
     room.game.stage = "awaiting_reactions";
@@ -1049,11 +1053,7 @@ export class RoomManager {
           if (testDueAt === undefined) {
             this.scheduleTestPlayer(room);
           } else if (testDueAt <= now) {
-            const hand = game.hands.get(player.seat) ?? [];
-            const tile = game.lastDraw?.seat === player.seat
-              ? game.lastDraw.tile.code
-              : sortTiles(hand).at(-1)?.code;
-            if (!tile) throw new Error("测试玩家自动出牌时没有手牌");
+            const tile = this.pickAutomaticDiscardTile(game, player.seat);
             const progress = this.discardTile(room.code, player.token, tile);
             events.push({
               kind: "test_player_auto_discard",
@@ -1064,11 +1064,7 @@ export class RoomManager {
             });
           }
         } else if (player && (player.autoManaged || expired)) {
-          const hand = game.hands.get(player.seat) ?? [];
-          const tile = game.lastDraw?.seat === player.seat
-            ? game.lastDraw.tile.code
-            : sortTiles(hand).at(-1)?.code;
-          if (!tile) throw new Error("自动出牌时当前玩家没有手牌");
+          const tile = this.pickAutomaticDiscardTile(game, player.seat);
           this.recordPublicAction(room, { kind: "turn_timed_out", seat: player.seat, tile });
           const progress = this.discardTile(room.code, player.token, tile);
           events.push({
@@ -1425,6 +1421,7 @@ export class RoomManager {
             viewerSeat,
             selfHand: viewerSeat === undefined ? undefined : sortTiles(room.game.hands.get(viewerSeat) ?? []).map((tile) => tile.code),
             selfDrawnTile: viewerSeat !== undefined && room.game.lastDraw?.seat === viewerSeat ? room.game.lastDraw.tile.code : undefined,
+            selfDiscardRestrictedTile: viewerSeat !== undefined && room.game.discardRestriction?.seat === viewerSeat ? room.game.discardRestriction.tile : undefined,
             latestDiscard: room.game.discards.at(-1),
             discards: [...room.game.discards],
             melds: [...room.game.melds.values()].flat().map((meld) =>
@@ -1587,6 +1584,7 @@ export class RoomManager {
     game.melds.get(seat)?.push(meld);
     game.pendingReaction = undefined;
     game.lastDraw = undefined;
+    game.discardRestriction = option.kind === "chi" ? { seat, tile: discard.tile } : undefined;
     game.turnSeat = seat;
     if (option.kind === "gang") drawTileFromWallEnd(game, seat);
     else game.stage = "awaiting_discard";
@@ -1661,6 +1659,17 @@ export class RoomManager {
       hand.push(tile);
     }
     if (!robbedTileRemoved) throw new Error("抢杠牌不在待确认牌组中");
+  }
+
+  private pickAutomaticDiscardTile(game: InitialGameState, seat: number): TileCode {
+    const hand = game.hands.get(seat) ?? [];
+    const sortedCodes = sortTiles(hand).map((tile) => tile.code);
+    const drawn = game.lastDraw?.seat === seat ? game.lastDraw.tile.code : undefined;
+    const candidates = drawn ? [drawn, ...sortedCodes.filter((code) => code !== drawn)] : sortedCodes;
+    const restricted = game.discardRestriction?.seat === seat ? game.discardRestriction.tile : undefined;
+    const tile = candidates.find((code) => code !== restricted);
+    if (!tile) throw new Error("自动出牌时没有可打出的手牌");
+    return tile;
   }
 
   private removeTilesFromHand(hand: Tile[], codes: readonly TileCode[]): void {

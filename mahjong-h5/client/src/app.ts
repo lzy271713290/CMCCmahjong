@@ -561,7 +561,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
     const current = next.players.find((player) => player.seat === game.turnSeat);
     turnStatus.textContent = `等待 ${current?.name ?? `${game.turnSeat + 1}号位`} 出牌`;
   }
-  renderSelfHand(game.selfHand ?? [], game.selfDrawnTile, canDiscard);
+  renderSelfHand(game.selfHand ?? [], game.selfDrawnTile, canDiscard, game.selfDiscardRestrictedTile);
 }
 
 function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
@@ -1074,7 +1074,7 @@ function renderCenter(dealerSeat: number, turnSeat: number, viewerSeat: number):
   });
 }
 
-function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canDiscard: boolean): void {
+function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canDiscard: boolean, restrictedTile?: TileCode): void {
   selfHand.replaceChildren();
   const hand = [...tiles];
   let drawn: TileCode | undefined;
@@ -1082,15 +1082,15 @@ function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canD
     const index = hand.lastIndexOf(drawnTile);
     if (index >= 0) drawn = hand.splice(index, 1)[0];
   }
-  for (const code of hand) selfHand.append(createFaceTile(code, "hand", canDiscard));
+  for (const code of hand) selfHand.append(createFaceTile(code, "hand", canDiscard, canDiscard && code === restrictedTile));
   if (drawn) {
-    const tile = createFaceTile(drawn, "hand", canDiscard);
+    const tile = createFaceTile(drawn, "hand", canDiscard, canDiscard && drawn === restrictedTile);
     tile.classList.add("drawn");
     selfHand.append(tile);
   }
 }
 
-function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", interactive: boolean): HTMLElement {
+function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", interactive: boolean, restricted = false): HTMLElement {
   const tile = document.createElement(interactive ? "button" : "div");
   if (tile instanceof HTMLButtonElement) {
     tile.type = "button";
@@ -1102,7 +1102,7 @@ function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", inter
       }
     });
   }
-  tile.className = `tile-shell ${size}-tile`;
+  tile.className = `tile-shell ${size}-tile${restricted ? " restricted" : ""}`;
   tile.setAttribute("aria-label", tileLabel(code));
   tile.title = tileLabel(code);
   const face = document.createElement("span");

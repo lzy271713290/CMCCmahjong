@@ -29,6 +29,7 @@ export type InitialGameState = {
   discards: DiscardView[];
   melds: Map<number, MeldView[]>;
   lastDraw?: { seat: number; tile: Tile };
+  discardRestriction?: { seat: number; tile: TileCode };
   pendingReaction?: {
     discard: DiscardView;
     source: "discard" | "added_gang" | "special_gang" | "zhangmao";
