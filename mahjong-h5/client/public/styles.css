@@ -394,7 +394,7 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
 .seat-top .meld-rack { top: 8px; right: calc(50% + 66px); left: auto; flex-direction: row-reverse; transform: rotate(180deg); }
 .seat-left .meld-rack { top: 20px; left: 162px; flex-direction: row-reverse; transform: rotate(90deg); transform-origin: 0 0; }
 .seat-right .meld-rack { top: 20px; right: 162px; transform: rotate(-90deg); transform-origin: 100% 0; }
-.game-notice { position: absolute; z-index: 35; right: 0; bottom: 20%; left: 0; margin: 0; color: #ffe7a5; text-align: center; text-shadow: 0 2px 5px #002b25; font-size: 12px; pointer-events: none; }
+.game-notice { position: absolute; z-index: 35; right: 0; bottom: 24%; left: 0; margin: 0; color: #ffe7a5; text-align: center; text-shadow: 0 2px 5px #002b25; font-size: 12px; pointer-events: none; }
 .rotate-tip { display: none; transition: opacity .35s ease, visibility .35s ease; }
 .rotate-tip.faded { opacity: 0; visibility: hidden; }
 
