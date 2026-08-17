@@ -985,15 +985,13 @@ function renderScoreSummary(next: RoomSnapshot): void {
 }
 
 function renderWalls(remaining: number): void {
-  const visibleBacks = Math.ceil((remaining / 83) * 40);
+  const baseCount = Math.floor(remaining / positions.length);
+  const extraCount = remaining % positions.length;
   positions.forEach((position, wallIndex) => {
     const wall = required<HTMLElement>(`wall-${position}`);
     wall.replaceChildren();
-    for (let tileIndex = 0; tileIndex < 10; tileIndex += 1) {
-      const tile = createTileBack();
-      if (wallIndex * 10 + tileIndex >= visibleBacks) tile.classList.add("consumed");
-      wall.append(tile);
-    }
+    const count = baseCount + (wallIndex < extraCount ? 1 : 0);
+    for (let tileIndex = 0; tileIndex < count; tileIndex += 1) wall.append(createTileBack());
   });
 }
 
