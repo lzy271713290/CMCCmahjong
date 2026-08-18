@@ -307,15 +307,14 @@ function handleMessage(message: ServerMessage): void {
   } else if (message.type === "snapshot") {
     const previous = snapshot;
     clearPendingRequest();
-    const combinedDrawAndDiscard = Boolean(
+    const preCollectDraw = Boolean(
       previous?.game
       && message.snapshot.game
-      && message.snapshot.game.wallRemaining < previous.game.wallRemaining
-      && message.snapshot.game.discards.length > previous.game.discards.length,
+      && message.snapshot.game.wallRemaining < previous.game.wallRemaining,
     );
-    if (combinedDrawAndDiscard) collectSnapshotFeedback(previous, message.snapshot);
+    if (preCollectDraw) collectSnapshotFeedback(previous, message.snapshot);
     render(message.snapshot);
-    if (!combinedDrawAndDiscard) collectSnapshotFeedback(previous, message.snapshot);
+    if (!preCollectDraw) collectSnapshotFeedback(previous, message.snapshot);
   } else if (message.type === "error") {
     clearPendingRequest();
     if (message.code === "ROOM_NOT_FOUND" || message.code === "TOKEN_INVALID") {
@@ -614,27 +613,34 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
       speakerButton.setAttribute("aria-label", "喇叭");
       actions.append(micButton, speakerButton);
     }
-    const chatButton = document.createElement("button");
-    chatButton.type = "button";
-    chatButton.className = "seat-action-btn";
-    chatButton.dataset.action = "chat";
-    chatButton.dataset.seat = String(player.seat);
-    chatButton.setAttribute("aria-label", "公屏聊天");
-    chatButton.innerHTML = iconSvg("chat");
-    actions.append(chatButton);
+    if (position === "bottom") {
+      const chatButton = document.createElement("button");
+      chatButton.type = "button";
+      chatButton.className = "seat-action-btn";
+      chatButton.dataset.action = "chat";
+      chatButton.dataset.seat = String(player.seat);
+      chatButton.setAttribute("aria-label", "公屏聊天");
+      chatButton.innerHTML = iconSvg("chat");
+      actions.append(chatButton);
+    }
     if (position !== "bottom") {
+      const throwSelect = document.createElement("select");
+      throwSelect.className = "seat-throw-select";
+      throwSelect.dataset.action = "throw";
+      throwSelect.dataset.seat = String(player.seat);
+      throwSelect.setAttribute("aria-label", `向 ${player.name} 丢东西`);
+      throwSelect.title = `向 ${player.name} 丢东西`;
+      const placeholder = document.createElement("option");
+      placeholder.value = "";
+      placeholder.textContent = "丢";
+      throwSelect.append(placeholder);
       for (const throwable of THROWABLES) {
-        const throwButton = document.createElement("button");
-        throwButton.type = "button";
-        throwButton.className = "seat-action-btn throw-action";
-        throwButton.dataset.action = "throw";
-        throwButton.dataset.throwable = throwable.id;
-        throwButton.dataset.seat = String(player.seat);
-        throwButton.setAttribute("aria-label", `向 ${player.name} 丢${throwable.label}`);
-        throwButton.title = `向 ${player.name} 丢${throwable.label}`;
-        throwButton.textContent = throwable.emote;
-        actions.append(throwButton);
+        const option = document.createElement("option");
+        option.value = throwable.id;
+        option.textContent = `${throwable.emote} ${throwable.label}`;
+        throwSelect.append(option);
       }
+      actions.append(throwSelect);
     }
     avatarBlock.append(avatar, actions);
     const info = document.createElement("div");
@@ -826,6 +832,33 @@ function renderScoreSummary(next: RoomSnapshot): void {
     : `第${game.roundNumber}局 · 当前累计分`;
   header.append(title, subtitle);
   scoreSummary.append(header);
+
+  const podium = document.createElement("div");
+  podium.className = "settlement-podium";
+  for (const player of [...next.players].sort((left, right) => left.seat - right.seat)) {
+    const delta = game.scoreDeltas[player.seat] ?? 0;
+    const isWinner = result.winnerSeats.includes(player.seat);
+    const card = document.createElement("div");
+    card.className = `result-player${isWinner ? " is-winner" : delta < 0 ? " is-loser" : " is-draw"}`;
+    const avatar = document.createElement("img");
+    avatar.className = "result-avatar";
+    avatar.src = avatarUrl(player.avatar);
+    avatar.alt = "";
+    const badge = document.createElement("span");
+    badge.className = "result-badge";
+    badge.textContent = isWinner ? "胜" : delta < 0 ? "负" : "平";
+    const name = document.createElement("strong");
+    name.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+    const deltaText = document.createElement("span");
+    deltaText.className = `result-delta ${delta > 0 ? "positive" : delta < 0 ? "negative" : ""}`;
+    deltaText.textContent = `${delta >= 0 ? "+" : ""}${delta}`;
+    const total = document.createElement("span");
+    total.className = "result-total";
+    total.textContent = `累计 ${next.scoreTotals[player.seat] ?? next.match.startScore ?? 100}`;
+    card.append(avatar, badge, name, deltaText, total);
+    podium.append(card);
+  }
+  scoreSummary.append(podium);
 
   const scoreboard = document.createElement("div");
   scoreboard.className = "settlement-matrix";
@@ -1671,7 +1704,7 @@ function playThrowableThrow(fromSeat: number | undefined, fromId: string, toSeat
   const source = fromSeat === undefined
     ? document.querySelector<HTMLElement>(`.spectator-chip[data-spectator-id="${fromId}"]`)
     : document.querySelector<HTMLElement>(`.player-seat[data-seat="${fromSeat}"]`);
-  const target = toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"] .avatar-block`);
+  const target = toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"] .avatar`);
   const startRect = source?.getBoundingClientRect();
   const endRect = target?.getBoundingClientRect() ?? (toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"]`)?.getBoundingClientRect()) ?? source?.getBoundingClientRect();
   if (!startRect || !endRect) {
@@ -2088,7 +2121,12 @@ tableSeats.addEventListener("click", (event) => {
   if (action === "mic") void toggleMicFromSeat();
   else if (action === "speaker") toggleSpeakerFromSeat();
   else if (action === "chat") setChatVisible(publicChat.classList.contains("hidden"));
-  else if (action === "throw") throwAtSeat(Number(button.dataset.seat), (button.dataset.throwable as ThrowableId | undefined) ?? "slipper");
+});
+tableSeats.addEventListener("change", (event) => {
+  const select = (event.target as HTMLElement).closest<HTMLSelectElement>("[data-action=\"throw\"]");
+  if (!select?.value || !select.dataset.seat) return;
+  throwAtSeat(Number(select.dataset.seat), select.value as ThrowableId);
+  select.value = "";
 });
 chatToggleButton.addEventListener("click", () => setChatVisible(publicChat.classList.contains("hidden")));
 chatCloseButton.addEventListener("click", () => setChatVisible(false));
