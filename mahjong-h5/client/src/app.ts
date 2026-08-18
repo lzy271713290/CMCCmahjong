@@ -1,5 +1,5 @@
 import type { MeldView, PlayerView, PublicActionView, ReactionOption, RoomSnapshot, ScoreFactor, ScorePaymentView, ServerMessage, TileCode, TurnOperationOption } from "../../shared/protocol.js";
-import { MahjongAudioManager, type ActionVoice, type AudioMonitorEvent, type EffectSound, type VoiceGender } from "./audio-manager.js";
+import { MahjongAudioManager, actionVoicePath, customVoicePath, type ActionVoice, type AudioMonitorEvent, type EffectSound, type VoiceGender } from "./audio-manager.js";
 import { VoiceChannel } from "./voice-channel.js";
 import { PUBLIC_REPLAY_FORMAT, parsePublicReplay, type PublicReplayPlayer, type PublicReplayRecord } from "./public-replay.js";
 
@@ -12,6 +12,7 @@ type Feedback = {
   kind: FeedbackKind;
   tile?: TileCode;
   actionVoice?: ActionVoice;
+  customVoice?: string;
   suppressTileVoice?: boolean;
   sound?: EffectSound;
   resultSound?: "win" | "lose";
@@ -29,6 +30,18 @@ type HistorySource = {
 const positions: TablePosition[] = ["bottom", "right", "top", "left"];
 const winds = ["东", "南", "西", "北"];
 type ThrowableId = "slipper" | "egg" | "potato";
+const HU_WIN_VOICES = [
+  "1_1_运气眷顾，轻轻松松胡一把_1.wav",
+  "1_1_哟呵，牌势到位，胡牌到手_1.wav",
+  "1_1_手感在线，这把稳稳胡牌_1.wav",
+  "1_1_属实没想到，又让我胡到一把_1.wav",
+  "1_1_这牌来得刚刚好，直接胡上_1.wav",
+  "1_1_哈哈，机会到手，果断胡牌_1.wav",
+  "1_1_牌运爆棚，轻轻松松拿下这局_1.wav",
+  "1_1_没想到这么顺利，又被我胡到咯_1.wav",
+  "1_1_嘿嘿，这把运气直接拉满，胡啦_1.wav",
+  "1_1_手气来了挡都挡不住，胡牌咯！_1.wav",
+];
 const THROWABLES: Array<{ id: ThrowableId; emote: string; label: string; impact: string }> = [
   { id: "slipper", emote: "🩴", label: "拖鞋", impact: "🩴💥" },
   { id: "egg", emote: "🥚", label: "鸡蛋", impact: "🍳💥" },
@@ -1329,11 +1342,20 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
     }
     const isChi = meld.kind === "chi";
     const isPeng = meld.kind === "peng";
-    const label = isChi ? "吃" : isPeng ? "碰" : meld.kind === "special_gang" ? meld.growthCount ? "涨毛" : "特殊杠" : "杠";
+    const isSpecialGang = meld.kind === "special_gang";
+    const isZhangmao = isSpecialGang && Boolean(meld.growthCount);
+    const label = isChi ? "吃" : isPeng ? "碰" : isZhangmao ? "涨毛" : isSpecialGang ? "特殊杠" : "杠";
+    const actionVoice: ActionVoice | undefined = isChi ? "chi" : isPeng ? "peng" : isSpecialGang ? undefined : "gang";
+    const customVoice = isZhangmao
+      ? customVoicePath("1_1_涨毛_1.wav")
+      : isSpecialGang
+        ? customVoicePath(meld.specialType === "dragons" ? "1_1_中_发_白_1.wav" : "1_1_东_南_西_北_1.wav")
+        : undefined;
     enqueueFeedback({
       text: `${playerName(next, meld.seat)} ${label}`,
       kind: "meld",
-      actionVoice: isChi ? "chi" : isPeng ? "peng" : "gang",
+      actionVoice,
+      customVoice,
       visual: isChi ? "chi" : isPeng ? "peng" : "gang",
       seat: meld.seat,
     });
@@ -1354,7 +1376,7 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
       enqueueFeedback({
         text: `${winners} ${label}`,
         kind: "hu",
-        actionVoice: "hu",
+        customVoice: randomHuVoicePath(),
         resultSound: viewerWon ? "win" : "lose",
         visual: after.roundResult.reason === "self_draw_hu" ? "zimo" : "hu",
         seat: after.roundResult.winnerSeats[0],
@@ -1384,6 +1406,11 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
   }
 }
 
+function randomHuVoicePath(): string {
+  const candidates = [actionVoicePath("hu"), ...HU_WIN_VOICES.map(customVoicePath)];
+  return candidates[Math.floor(Math.random() * candidates.length)]!;
+}
+
 function playerName(roomSnapshot: RoomSnapshot, seat: number): string {
   return roomSnapshot.players.find((player) => player.seat === seat)?.name ?? `${seat + 1}号位`;
 }
@@ -1411,17 +1438,21 @@ function showNextFeedback(): void {
 }
 
 function playFeedbackAudio(feedback: Feedback): void {
-  if (feedback.tile && !feedback.actionVoice && !feedback.suppressTileVoice) {
+  if (feedback.tile && !feedback.actionVoice && !feedback.customVoice && !feedback.suppressTileVoice) {
     audioManager.playEffect("discard");
     window.setTimeout(() => audioManager.playTile(feedback.tile!), 55);
   }
-  if (feedback.actionVoice) audioManager.playAction(feedback.actionVoice);
+  if (feedback.customVoice) {
+    audioManager.playVoiceFile(feedback.customVoice, feedback.kind === "hu" ? 1 : 0.92);
+  } else if (feedback.actionVoice) {
+    audioManager.playAction(feedback.actionVoice);
+  }
   if (feedback.sound) {
     audioManager.playEffect(feedback.sound);
     if (feedback.sound === "shuffle") audioManager.playEffect("deal", 380);
   }
   if (feedback.resultSound) audioManager.playEffect(feedback.resultSound, 420);
-  if (!feedback.tile && !feedback.actionVoice && !feedback.sound && (feedback.kind === "vote" || feedback.kind === "system")) {
+  if (!feedback.tile && !feedback.actionVoice && !feedback.customVoice && !feedback.sound && (feedback.kind === "vote" || feedback.kind === "system")) {
     audioManager.playEffect("ui");
   }
 }

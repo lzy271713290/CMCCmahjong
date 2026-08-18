@@ -18,6 +18,7 @@ export type AudioMonitorEvent = {
 };
 
 const SOUND_ROOT = "/assets/babykylin/sounds";
+const CUSTOM_VOICE_ROOT = "/assets/ext";
 const SETTINGS_KEY = "mahjong-audio-v2";
 
 const honorVoiceIds: Record<string, number> = {
@@ -64,6 +65,10 @@ export function tileVoicePath(tile: TileCode): string {
 
 export function actionVoicePath(action: ActionVoice): string {
   return actionVoiceFiles[action];
+}
+
+export function customVoicePath(fileName: string): string {
+  return `${CUSTOM_VOICE_ROOT}/${encodeURIComponent(fileName)}`;
 }
 
 export function effectSoundPath(effect: EffectSound): string {
@@ -160,6 +165,12 @@ export class MahjongAudioManager {
   playAction(action: ActionVoice): void {
     if (!this.settings.voice) return;
     this.playOneShot(actionVoicePath(action), "voice", action === "hu" ? 1 : 0.92, true, this.voicePitch());
+  }
+
+  playVoiceFile(path: string, volume = 0.92): void {
+    if (!this.settings.voice) return;
+    this.monitor({ event: "audio_voice_requested", channel: "voice", asset: path.split("/").at(-1), gender: this.settings.gender });
+    this.playOneShot(path, "voice", volume, true, this.voicePitch());
   }
 
   playEffect(effect: EffectSound, delayMs = 0): void {
