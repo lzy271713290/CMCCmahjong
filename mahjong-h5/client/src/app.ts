@@ -28,6 +28,12 @@ type HistorySource = {
 
 const positions: TablePosition[] = ["bottom", "right", "top", "left"];
 const winds = ["东", "南", "西", "北"];
+type ThrowableId = "slipper" | "egg" | "potato";
+const THROWABLES: Array<{ id: ThrowableId; emote: string; label: string; impact: string }> = [
+  { id: "slipper", emote: "🩴", label: "拖鞋", impact: "🩴💥" },
+  { id: "egg", emote: "🥚", label: "鸡蛋", impact: "🍳💥" },
+  { id: "potato", emote: "🥔", label: "土豆", impact: "🥔💥" },
+];
 const lobby = required<HTMLElement>("lobby");
 const room = required<HTMLElement>("room");
 const gameScreen = required<HTMLElement>("game-screen");
@@ -136,7 +142,6 @@ let pendingRequest: { type: string; timeout: number } | undefined;
 let feedbackTimer: number | undefined;
 let tableEffectTimer: number | undefined;
 const feedbackQueue: Feedback[] = [];
-const recentMeldAt = new Map<number, number>();
 const audioManager = new MahjongAudioManager(logAudioMonitor);
 let lastServerMessageAt = Date.now();
 let reconnectFeedbackPending = false;
@@ -154,8 +159,7 @@ let avatarDraft = selectedAvatar;
 if (!AVATAR_IDS.includes(selectedAvatar)) selectedAvatar = "a1";
 type ChatEntry = { seat?: number; senderId: string; senderName: string; senderAvatar: string; text: string; emote: boolean; ts: number };
 const chatHistory: ChatEntry[] = [];
-let slipperAnimationData: unknown;
-let lottieTimer: number | undefined;
+let selectedHandTile: TileCode | undefined;
 
 function logAudioMonitor(event: AudioMonitorEvent): void {
   const payload = { timestamp: new Date().toISOString(), ...event };
@@ -303,8 +307,15 @@ function handleMessage(message: ServerMessage): void {
   } else if (message.type === "snapshot") {
     const previous = snapshot;
     clearPendingRequest();
+    const combinedDrawAndDiscard = Boolean(
+      previous?.game
+      && message.snapshot.game
+      && message.snapshot.game.wallRemaining < previous.game.wallRemaining
+      && message.snapshot.game.discards.length > previous.game.discards.length,
+    );
+    if (combinedDrawAndDiscard) collectSnapshotFeedback(previous, message.snapshot);
     render(message.snapshot);
-    collectSnapshotFeedback(previous, message.snapshot);
+    if (!combinedDrawAndDiscard) collectSnapshotFeedback(previous, message.snapshot);
   } else if (message.type === "error") {
     clearPendingRequest();
     if (message.code === "ROOM_NOT_FOUND" || message.code === "TOKEN_INVALID") {
@@ -344,8 +355,9 @@ function handleMessage(message: ServerMessage): void {
     showChatBubble(message.fromSeat, message.fromId, message.text);
   } else if (message.type === "chat_emote") {
     appendChatEntry(message.fromSeat, message.fromId, message.fromName, message.fromAvatar, message.emote, true);
-    if (message.emote.includes("slipper") || message.emote.includes("🩴") || message.emote.includes("👡")) {
-      playSlipperThrow(message.fromSeat, message.fromId, message.toSeat);
+    const throwable = throwableByEmote(message.emote);
+    if (throwable) {
+      playThrowableThrow(message.fromSeat, message.fromId, message.toSeat, throwable);
     } else {
       showFloatingEmote(message.fromSeat, message.fromId, message.emote);
     }
@@ -522,6 +534,10 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   const game = next.game!;
   const viewerSeat = game.viewerSeat ?? me?.seat ?? 0;
   const isSpectator = next.viewerRole === "spectator";
+  const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
+  if (!canDiscard || (selectedHandTile && !(game.selfHand ?? []).includes(selectedHandTile) && game.selfDrawnTile !== selectedHandTile)) {
+    selectedHandTile = undefined;
+  }
   roundLabel.textContent = `第${game.roundNumber}/${next.match.totalRounds}局 · ${isSpectator ? "观战视角" : `${winds[(viewerSeat - game.dealerSeat + 4) % 4]}位视角`}`;
   wallStatus.textContent = String(game.wallRemaining);
   renderPlayers(next, viewerSeat);
@@ -535,7 +551,6 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   updateActionCountdown();
   refreshLiveHistory(next);
 
-  const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
   if (next.match.status === "completed") {
     turnStatus.textContent = `整场结束 · 已完成${next.match.completedRounds}局`;
   } else if (game.stage === "round_ended") {
@@ -608,15 +623,18 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     chatButton.innerHTML = iconSvg("chat");
     actions.append(chatButton);
     if (position !== "bottom") {
-      const slipperButton = document.createElement("button");
-      slipperButton.type = "button";
-      slipperButton.className = "seat-action-btn";
-      slipperButton.dataset.action = "slipper";
-      slipperButton.dataset.seat = String(player.seat);
-      slipperButton.setAttribute("aria-label", `向 ${player.name} 丢拖鞋`);
-      slipperButton.title = `向 ${player.name} 丢拖鞋`;
-      slipperButton.innerHTML = iconSvg("slipper");
-      actions.append(slipperButton);
+      for (const throwable of THROWABLES) {
+        const throwButton = document.createElement("button");
+        throwButton.type = "button";
+        throwButton.className = "seat-action-btn throw-action";
+        throwButton.dataset.action = "throw";
+        throwButton.dataset.throwable = throwable.id;
+        throwButton.dataset.seat = String(player.seat);
+        throwButton.setAttribute("aria-label", `向 ${player.name} 丢${throwable.label}`);
+        throwButton.title = `向 ${player.name} 丢${throwable.label}`;
+        throwButton.textContent = throwable.emote;
+        actions.append(throwButton);
+      }
     }
     avatarBlock.append(avatar, actions);
     const info = document.createElement("div");
@@ -1062,6 +1080,7 @@ function renderDiscards(discards: Array<{ seat: number; tile: TileCode }>, viewe
     const zone = required<HTMLElement>(`discards-${positionForSeat(discard.seat, viewerSeat)}`);
     const tile = createFaceTile(discard.tile, "discard", false);
     if (index === discards.length - 1) tile.classList.add("latest");
+    if (discard.tile === selectedHandTile) tile.classList.add("matching-selected");
     zone.append(tile);
   });
 }
@@ -1082,12 +1101,26 @@ function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canD
     const index = hand.lastIndexOf(drawnTile);
     if (index >= 0) drawn = hand.splice(index, 1)[0];
   }
-  for (const code of hand) selfHand.append(createFaceTile(code, "hand", canDiscard, canDiscard && code === restrictedTile));
+  for (const code of hand) {
+    const tile = createFaceTile(code, "hand", canDiscard, canDiscard && code === restrictedTile);
+    if (code === selectedHandTile) tile.classList.add("selected");
+    selfHand.append(tile);
+  }
   if (drawn) {
     const tile = createFaceTile(drawn, "hand", canDiscard, canDiscard && drawn === restrictedTile);
     tile.classList.add("drawn");
+    if (drawn === selectedHandTile) tile.classList.add("selected");
     selfHand.append(tile);
   }
+}
+
+function syncSelectedTileUI(): void {
+  selfHand.querySelectorAll<HTMLElement>(".hand-tile").forEach((tile) => {
+    tile.classList.toggle("selected", tile.dataset.tile === selectedHandTile);
+  });
+  document.querySelectorAll<HTMLElement>(".discard-tile").forEach((tile) => {
+    tile.classList.toggle("matching-selected", tile.dataset.tile === selectedHandTile);
+  });
 }
 
 function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", interactive: boolean, restricted = false): HTMLElement {
@@ -1095,6 +1128,18 @@ function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", inter
   if (tile instanceof HTMLButtonElement) {
     tile.type = "button";
     tile.addEventListener("click", () => {
+      if (restricted) {
+        showNotice(`本回合不能打出 ${tileLabel(code)}`);
+        return;
+      }
+      if (selectedHandTile !== code) {
+        selectedHandTile = code;
+        syncSelectedTileUI();
+        showNotice(`已选中 ${tileLabel(code)}，再次点击打出`);
+        return;
+      }
+      selectedHandTile = undefined;
+      syncSelectedTileUI();
       if (send({ type: "discard_tile", tile: code })) {
         selfHand.querySelectorAll("button").forEach((button) => ((button as HTMLButtonElement).disabled = true));
         tile.classList.add("discarding");
@@ -1103,6 +1148,7 @@ function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", inter
     });
   }
   tile.className = `tile-shell ${size}-tile${restricted ? " restricted" : ""}`;
+  tile.dataset.tile = code;
   tile.setAttribute("aria-label", tileLabel(code));
   tile.title = tileLabel(code);
   const face = document.createElement("span");
@@ -1187,7 +1233,6 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
     const isChi = meld.kind === "chi";
     const isPeng = meld.kind === "peng";
     const label = isChi ? "吃" : isPeng ? "碰" : meld.kind === "special_gang" ? meld.growthCount ? "涨毛" : "特殊杠" : "杠";
-    recentMeldAt.set(meld.seat, Date.now());
     enqueueFeedback({
       text: `${playerName(next, meld.seat)} ${label}`,
       kind: "meld",
@@ -1199,10 +1244,9 @@ function collectSnapshotFeedback(previous: RoomSnapshot | undefined, next: RoomS
 
   if (after.discards.length > before.discards.length) {
     for (const discard of after.discards.slice(before.discards.length).slice(-4)) {
-      const suppressTileVoice = (recentMeldAt.get(discard.seat) ?? 0) > Date.now() - 4000;
-      enqueueFeedback({ text: `${playerName(next, discard.seat)} 打出 ${tileLabel(discard.tile)}`, kind: "discard", tile: discard.tile, seat: discard.seat, suppressTileVoice });
+      enqueueFeedback({ text: `${playerName(next, discard.seat)} 打出 ${tileLabel(discard.tile)}`, kind: "discard", tile: discard.tile, seat: discard.seat });
     }
-    document.querySelector(".discard-tile.latest")?.classList.add("new-discard");
+    queueMicrotask(() => document.querySelector(".discard-tile.latest")?.classList.add("new-discard"));
   }
 
   if (!before.roundResult && after.roundResult) {
@@ -1609,11 +1653,21 @@ function toggleSpeakerFromSeat(): void {
   sendDirect({ type: "voice_state", micOn: voiceChannel.micOn, speakerOn: result.speakerOn });
 }
 
-function throwSlipperAt(targetSeat: number): void {
-  sendDirect({ type: "chat_emote", emote: "slipper", toSeat: targetSeat });
+function throwableByEmote(emote: string): ThrowableId | undefined {
+  return THROWABLES.find((item) => item.emote === emote || item.id === emote)?.id;
 }
 
-function playSlipperThrow(fromSeat: number | undefined, fromId: string, toSeat?: number): void {
+function throwableConfig(id: ThrowableId): (typeof THROWABLES)[number] {
+  return THROWABLES.find((item) => item.id === id) ?? THROWABLES[0]!;
+}
+
+function throwAtSeat(targetSeat: number, throwableId: ThrowableId): void {
+  const throwable = throwableConfig(throwableId);
+  sendDirect({ type: "chat_emote", emote: throwable.emote, toSeat: targetSeat });
+}
+
+function playThrowableThrow(fromSeat: number | undefined, fromId: string, toSeat: number | undefined, throwableId: ThrowableId): void {
+  const throwable = throwableConfig(throwableId);
   const source = fromSeat === undefined
     ? document.querySelector<HTMLElement>(`.spectator-chip[data-spectator-id="${fromId}"]`)
     : document.querySelector<HTMLElement>(`.player-seat[data-seat="${fromSeat}"]`);
@@ -1621,57 +1675,44 @@ function playSlipperThrow(fromSeat: number | undefined, fromId: string, toSeat?:
   const startRect = source?.getBoundingClientRect();
   const endRect = target?.getBoundingClientRect() ?? (toSeat === undefined ? undefined : document.querySelector<HTMLElement>(`.player-seat[data-seat="${toSeat}"]`)?.getBoundingClientRect()) ?? source?.getBoundingClientRect();
   if (!startRect || !endRect) {
-    showSmackBurst(window.innerWidth / 2, window.innerHeight / 2);
+    showImpactBurst(window.innerWidth / 2, window.innerHeight / 2, throwable.impact);
     return;
   }
   const startX = startRect.left + startRect.width / 2 - 22;
   const startY = startRect.top + startRect.height / 2 - 22;
   const endX = endRect.left + endRect.width / 2 - 22;
   const endY = endRect.top + endRect.height / 2 - 22;
-  const slipper = document.createElement("div");
-  slipper.className = "flying-slipper";
-  slipper.textContent = "🩴";
-  slipper.style.setProperty("--fx-sx", `${startX}px`);
-  slipper.style.setProperty("--fx-sy", `${startY}px`);
-  slipper.style.setProperty("--fx-ex", `${endX}px`);
-  slipper.style.setProperty("--fx-ey", `${endY}px`);
-  slipper.style.setProperty("--fx-sr", `${Math.random() > 0.5 ? 1 : -1 * (360 + Math.random() * 200)}deg`);
-  throwEffect.append(slipper);
-  window.setTimeout(() => {
-    slipper.remove();
-    showSmackBurst(endX + 22, endY + 22);
-  }, 720);
+  const projectile = document.createElement("div");
+  projectile.className = "flying-slipper flying-throwable";
+  projectile.textContent = throwable.emote;
+  projectile.style.setProperty("--fx-sx", `${startX}px`);
+  projectile.style.setProperty("--fx-sy", `${startY}px`);
+  projectile.style.setProperty("--fx-ex", `${endX}px`);
+  projectile.style.setProperty("--fx-ey", `${endY}px`);
+  projectile.style.setProperty("--fx-sr", `${Math.random() > 0.5 ? 1 : -1 * (360 + Math.random() * 200)}deg`);
+  throwEffect.append(projectile);
+  let settled = false;
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    projectile.remove();
+    showImpactBurst(endX + 22, endY + 22, throwable.impact);
+  };
+  projectile.addEventListener("animationend", finish, { once: true });
+  window.setTimeout(finish, 850);
 }
 
-async function loadSlipperAnimation(): Promise<unknown> {
-  if (!slipperAnimationData) {
-    const response = await fetch("/assets/effects/slipper-smack.json");
-    if (!response.ok) throw new Error("slipper animation unavailable");
-    slipperAnimationData = await response.json();
-  }
-  return slipperAnimationData;
-}
-
-function showSmackBurst(x: number, y: number): void {
+function showImpactBurst(x: number, y: number, impact: string): void {
   const burst = document.createElement("div");
   burst.className = "smack-burst";
   burst.style.left = `${x}px`;
   burst.style.top = `${y}px`;
+  const fallback = document.createElement("div");
+  fallback.className = "smack-fallback";
+  fallback.textContent = impact;
+  burst.append(fallback);
   throwEffect.append(burst);
-  const lottieLib = (window as unknown as { lottie?: { loadAnimation: (options: Record<string, unknown>) => unknown } }).lottie;
-  void loadSlipperAnimation().then((animationData) => {
-    if (lottieLib?.loadAnimation && !burst.dataset.failed) {
-      lottieLib.loadAnimation({ container: burst, renderer: "svg", loop: false, autoplay: true, animationData });
-    }
-  }).catch(() => {
-    burst.dataset.failed = "1";
-    const fallback = document.createElement("div");
-    fallback.className = "smack-fallback";
-    fallback.textContent = "💥🩴";
-    burst.append(fallback);
-  });
-  window.clearTimeout(lottieTimer);
-  lottieTimer = window.setTimeout(() => burst.remove(), 1350);
+  window.setTimeout(() => burst.remove(), 1350);
 }
 
 function showFloatingEmote(seat: number | undefined, senderId: string, emote: string): void {
@@ -2047,7 +2088,7 @@ tableSeats.addEventListener("click", (event) => {
   if (action === "mic") void toggleMicFromSeat();
   else if (action === "speaker") toggleSpeakerFromSeat();
   else if (action === "chat") setChatVisible(publicChat.classList.contains("hidden"));
-  else if (action === "slipper") throwSlipperAt(Number(button.dataset.seat));
+  else if (action === "throw") throwAtSeat(Number(button.dataset.seat), (button.dataset.throwable as ThrowableId | undefined) ?? "slipper");
 });
 chatToggleButton.addEventListener("click", () => setChatVisible(publicChat.classList.contains("hidden")));
 chatCloseButton.addEventListener("click", () => setChatVisible(false));
@@ -2058,7 +2099,7 @@ chatForm.addEventListener("submit", (event) => {
   sendDirect({ type: "chat_message", text });
   chatInput.value = "";
 });
-for (const emote of ["😂", "👍", "🍀", "🔥", "🎉", "😡", "😴", "🀄", "🩴"]) {
+for (const emote of ["😂", "👍", "🍀", "🔥", "🎉", "😡", "😴", "🀄"]) {
   const button = document.createElement("button");
   button.type = "button";
   button.className = "chat-emote-button";

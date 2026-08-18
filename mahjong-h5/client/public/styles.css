@@ -145,9 +145,10 @@ body.in-game .shell { display: none; }
 .player-seat.managed .avatar { border-color: #f0a86e; box-shadow: 0 0 0 3px rgba(70,36,18,.72), 0 0 18px rgba(240,168,110,.7); }
 .avatar-block { display: grid; flex: 0 0 auto; justify-items: center; gap: 3px; }
 .avatar { position: relative; display: block; width: 36px; height: 36px; border: 2px solid #d9bd66; border-radius: 10px; background: linear-gradient(145deg, #f2d491, #96631e); object-fit: cover; box-shadow: 0 0 0 3px rgba(0,41,37,.7); }
-.player-actions { display: flex; gap: 3px; }
+.player-actions { display: flex; max-width: 96px; flex-wrap: wrap; justify-content: center; gap: 3px; }
 .seat-action-btn { display: grid; width: 20px; height: 20px; padding: 0; place-items: center; border: 1px solid rgba(215,220,193,.42); border-radius: 50%; background: rgba(2,34,30,.82); color: #e6f2ea; cursor: pointer; }
 .seat-action-btn svg { width: 12px; height: 12px; }
+.seat-action-btn.throw-action { font-size: 12px; line-height: 1; }
 .seat-action-btn.active { border-color: #ffe79b; background: #d5aa43; color: #173b31; }
 .seat-action-btn.mic-off { color: #d98a75; }
 .player-info { display: grid; min-width: 75px; gap: 2px; padding: 4px 7px; border-radius: 7px; background: rgba(0,32,29,.72); }
@@ -215,13 +216,13 @@ body.in-game .shell { display: none; }
 .opponent-rack .tile-back { box-shadow: inset 0 0 0 2px rgba(226,247,250,.55), 2px 3px 3px rgba(0,0,0,.28), -1px 0 2px rgba(0,0,0,.14); }
 
 .discard-zone { position: absolute; z-index: 10; display: grid; gap: 2px; align-content: center; justify-content: center; }
-.discards-bottom, .discards-top { grid-template-columns: repeat(8, 14px); width: 130px; min-height: 48px; left: 50%; transform: translateX(-50%); }
+.discards-bottom, .discards-top { grid-template-columns: repeat(8, 16px); width: 146px; min-height: 56px; left: 50%; transform: translateX(-50%); }
 .discards-bottom { bottom: 26%; }
 .discards-top { top: 30%; transform: translateX(-50%) rotate(180deg); }
-.discards-left, .discards-right { grid-template-columns: repeat(6, 12px); width: 82px; min-height: 40px; top: 47%; }
+.discards-left, .discards-right { grid-template-columns: repeat(6, 14px); width: 92px; min-height: 48px; top: 47%; }
 .discards-left { left: 34.7%; transform: translate(-50%, -50%) rotate(90deg); }
 .discards-right { right: 34.7%; transform: translate(50%, -50%) rotate(-90deg); }
-.discards-left .discard-tile, .discards-right .discard-tile { --tile-scale: .22; width: 12px; height: 18px; }
+.discards-left .discard-tile, .discards-right .discard-tile { --tile-scale: .27; width: 14px; height: 21px; }
 
 .center-console { position: absolute; z-index: 6; top: 55%; left: 50%; width: 46px; height: 46px; transform: translate(-50%,-50%); border: 2px solid rgba(206,196,119,.6); border-radius: 50%; background: radial-gradient(circle, rgba(9,81,74,.96) 0 42%, rgba(1,44,41,.95) 43% 70%, rgba(4,29,29,.92) 71%); box-shadow: 0 5px 14px rgba(0,0,0,.4), inset 0 0 10px rgba(126,224,194,.2); }
 .center-console::before { content: ""; position: absolute; inset: 5px; border: 1px solid rgba(152,218,194,.38); border-radius: 4px; transform: rotate(45deg); }
@@ -383,11 +384,13 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
 .hand-tile.drawn { margin-left: 8px; transform: translateY(-4px); }
 .hand-tile.drawn .tile-face { animation: drawn-tile-in .28s ease-out both; }
 .hand-tile.discarding { z-index: 8; animation: hand-discard .2s ease-in both; }
-.discard-tile { --tile-scale: .26; width: 14px; height: 21px; filter: drop-shadow(0 2px 2px rgba(0,0,0,.3)); }
+.hand-tile.selected { z-index: 9; transform: translateY(-13px); filter: drop-shadow(0 9px 6px rgba(83,205,255,.85)); }
+.discard-tile { --tile-scale: .3; width: 16px; height: 24px; filter: drop-shadow(0 2px 2px rgba(0,0,0,.3)); }
 .meld-tile { --tile-scale: .29; width: 16px; height: 25px; }
 .tile-back.meld-back { width: 16px; height: 25px; }
 .discard-tile.latest { z-index: 3; outline: 1px solid #ffd74d; border-radius: 3px; filter: drop-shadow(0 0 5px #ffe25b); }
 .discard-tile.latest.new-discard { animation: discard-land .3s cubic-bezier(.18,.75,.32,1.25) both; }
+.discard-tile.matching-selected { z-index: 4; outline: 2px solid #4dd8ff; border-radius: 3px; filter: drop-shadow(0 0 7px rgba(77,216,255,.95)); }
 .meld-rack { position: absolute; z-index: 5; display: flex; gap: 4px; filter: drop-shadow(0 3px 3px rgba(0,0,0,.35)); }
 .meld-group { display: flex; gap: 1px; padding: 2px; border-radius: 3px; background: rgba(0,40,35,.45); }
 .meld-rack-self { position: static; flex: 0 0 auto; flex-direction: row-reverse; align-items: flex-end; max-width: 46%; flex-wrap: wrap; row-gap: 2px; }
@@ -418,6 +421,7 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .avatar-option { width: 38px; height: 38px; }
   .seat-action-btn { width: 20px; height: 20px; }
   .seat-action-btn svg { width: 12px; height: 12px; }
+.seat-action-btn.throw-action { font-size: 12px; line-height: 1; }
   .player-info { min-width: 75px; padding: 4px 7px; }
   .player-info strong { max-width: 85px; font-size: 11px; }
   .player-info span { font-size: 9px; }
@@ -489,14 +493,14 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .self-hand { min-height: 48px; gap: 1px; }
   .self-area { right: 12%; left: 24%; bottom: 1%; }
   .discard-zone { gap: 2px; }
-  .discards-bottom, .discards-top { grid-template-columns: repeat(8, 13px); width: 122px; min-height: 44px; }
-  .discards-left, .discards-right { grid-template-columns: repeat(6, 11px); width: 76px; min-height: 36px; }
-  .discards-left .discard-tile, .discards-right .discard-tile { --tile-scale: .2; width: 11px; height: 17px; }
+  .discards-bottom, .discards-top { grid-template-columns: repeat(8, 15px); width: 138px; min-height: 52px; }
+  .discards-left, .discards-right { grid-template-columns: repeat(6, 13px); width: 86px; min-height: 44px; }
+  .discards-left .discard-tile, .discards-right .discard-tile { --tile-scale: .25; width: 13px; height: 20px; }
   .discards-top { top: 30%; }
   .discards-bottom { bottom: 26%; }
   .discards-left { left: 34.7%; transform: translate(-50%, -50%) rotate(90deg); }
   .discards-right { right: 34.7%; transform: translate(50%, -50%) rotate(-90deg); }
-  .discard-tile { --tile-scale: .24; width: 13px; height: 20px; }
+  .discard-tile { --tile-scale: .28; width: 15px; height: 22px; }
   .table-hud { top: 6px; }
   .hud-room { padding: 5px 8px; }
   .hud-room strong { font-size: 14px; }
