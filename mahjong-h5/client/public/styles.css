@@ -166,6 +166,10 @@ body.in-game .shell { display: none; }
 .player-seat.active .avatar { border-color: #fff3aa; box-shadow: 0 0 0 3px rgba(22,81,65,.8), 0 0 20px #ffe372; animation: active-player 1.4s ease-in-out infinite; }
 .seat-bottom { bottom: 1.5%; left: 8%; right: 3.5%; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 3px; }
 .seat-bottom .player-info { margin-left: 8px; }
+.self-chat-entry { position: absolute; z-index: 24; left: 48px; bottom: 36px; display: flex; min-width: 58px; min-height: 30px; align-items: center; justify-content: center; gap: 5px; padding: 5px 8px; border: 1px solid rgba(255,224,139,.66); border-radius: 999px; background: rgba(2,34,30,.92); color: #f4dfa1; font-size: 10px; font-weight: 900; line-height: 1; box-shadow: 0 5px 13px rgba(0,0,0,.35); cursor: pointer; }
+.self-chat-entry svg { width: 14px; height: 14px; }
+.self-chat-entry:active { transform: translateY(1px); }
+.self-chat-entry.active { border-color: #ffe79b; background: #d5aa43; color: #173b31; }
 .seat-top { top: 54px; left: 0; width: 100%; justify-content: flex-end; }
 .seat-top .avatar-block, .seat-top .player-info { margin-left: 10px; }
 .seat-left { top: 31%; left: 0.5%; flex-direction: column; }
@@ -492,6 +496,10 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .player-info span { font-size: 9px; }
   .seat-bottom { bottom: 1.5%; left: 8%; flex-direction: column; align-items: flex-start; justify-content: flex-end; gap: 3px; }
   .seat-bottom .player-info { margin-left: 8px; }
+.self-chat-entry { position: absolute; z-index: 24; left: 48px; bottom: 36px; display: flex; min-width: 58px; min-height: 30px; align-items: center; justify-content: center; gap: 5px; padding: 5px 8px; border: 1px solid rgba(255,224,139,.66); border-radius: 999px; background: rgba(2,34,30,.92); color: #f4dfa1; font-size: 10px; font-weight: 900; line-height: 1; box-shadow: 0 5px 13px rgba(0,0,0,.35); cursor: pointer; }
+.self-chat-entry svg { width: 14px; height: 14px; }
+.self-chat-entry:active { transform: translateY(1px); }
+.self-chat-entry.active { border-color: #ffe79b; background: #d5aa43; color: #173b31; }
   .seat-top { top: 54px; left: 0; width: 100%; justify-content: flex-end; transform: none; }
   .seat-top .avatar-block, .seat-top .player-info { margin-left: 10px; }
   .seat-top .opponent-rack { top: 8px; }
