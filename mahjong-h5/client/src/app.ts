@@ -67,6 +67,7 @@ const THROWABLES: Array<{ id: ThrowableId; emote: string; label: string; impact:
   { id: "egg", emote: "🥚", label: "鸡蛋", impact: "🍳💥" },
   { id: "potato", emote: "🥔", label: "土豆", impact: "🥔💥" },
 ];
+const home = required<HTMLElement>("home");
 const lobby = required<HTMLElement>("lobby");
 const room = required<HTMLElement>("room");
 const gameScreen = required<HTMLElement>("game-screen");
@@ -143,6 +144,12 @@ const historyCloseXButton = required<HTMLButtonElement>("history-close-x");
 const requestDissolveButton = required<HTMLButtonElement>("request-dissolve");
 const actionCountdown = required<HTMLElement>("action-countdown");
 const startScoreInput = required<HTMLInputElement>("start-score");
+const homeCreateButton = required<HTMLButtonElement>("home-create");
+const homeJoinButton = required<HTMLButtonElement>("home-join");
+const setupBackButton = required<HTMLButtonElement>("setup-back");
+const setupTitle = required<HTMLElement>("setup-title");
+const createSettings = required<HTMLElement>("create-settings");
+const joinSettings = required<HTMLElement>("join-settings");
 const chatToggleButton = required<HTMLButtonElement>("chat-toggle");
 const publicChat = required<HTMLElement>("public-chat");
 const chatCloseButton = required<HTMLButtonElement>("chat-close");
@@ -193,6 +200,7 @@ let drawRenderTimer: number | undefined;
 let delayedDrawSnapshot: RoomSnapshot | undefined;
 let avatarDraft = selectedAvatar;
 if (!AVATAR_IDS.includes(selectedAvatar)) selectedAvatar = "a1";
+let setupMode: "create" | "join" | undefined;
 type ChatEntry = { seat?: number; senderId: string; senderName: string; senderAvatar: string; text: string; emote: boolean; ts: number };
 const chatHistory: ChatEntry[] = [];
 let selectedHandTile: TileCode | undefined;
@@ -438,6 +446,7 @@ function render(next: RoomSnapshot): void {
   const isPlaying = next.phase === "playing" && Boolean(next.game);
   audioManager.setInGame(isPlaying && next.match.status !== "completed");
   document.body.classList.add("in-game");
+  home.classList.add("hidden");
   lobby.classList.add("hidden");
   room.classList.add("hidden");
   gameScreen.classList.remove("hidden");
@@ -1686,15 +1695,38 @@ function showLobby(): void {
   voiceStates.clear();
   audioManager.setInGame(false);
   setAudioSettingsVisible(false);
+  setupMode = undefined;
   document.body.classList.remove("in-game");
+  lobby.classList.add("hidden");
+  room.classList.add("hidden");
+  gameScreen.classList.add("hidden");
+  waitingControls.classList.add("hidden");
+  spectatorStrip.classList.add("hidden");
+  home.classList.remove("hidden");
+  networkOverlay.classList.add("hidden");
+  setChatVisible(false);
+  avatarOverlay.classList.add("hidden");
+}
+
+function showSetup(mode: "create" | "join"): void {
+  setupMode = mode;
+  document.body.classList.remove("in-game");
+  home.classList.add("hidden");
   room.classList.add("hidden");
   gameScreen.classList.add("hidden");
   waitingControls.classList.add("hidden");
   spectatorStrip.classList.add("hidden");
   lobby.classList.remove("hidden");
-  networkOverlay.classList.add("hidden");
-  setChatVisible(false);
-  avatarOverlay.classList.add("hidden");
+  setupTitle.textContent = mode === "create" ? "创建房间" : "加入房间";
+  createSettings.classList.toggle("hidden", mode !== "create");
+  joinSettings.classList.toggle("hidden", mode !== "join");
+  createButton.classList.toggle("hidden", mode !== "create");
+  joinButton.classList.toggle("hidden", mode !== "join");
+  const invitedRoom = new URLSearchParams(location.search).get("room");
+  if (mode === "join" && invitedRoom && /^\d{6}$/.test(invitedRoom)) codeInput.value = invitedRoom;
+  renderAvatarGrid(avatarGrid, selectedAvatar, pickLobbyAvatar);
+  notice.textContent = "";
+  gameNotice.textContent = "";
 }
 
 function loadSession(): SavedSession | undefined {
@@ -2210,6 +2242,10 @@ async function exportPublicHistory(): Promise<void> {
   showNotice(copied ? "公共记录已复制，并尝试下载JSON" : "公共记录已尝试下载JSON");
 }
 
+homeCreateButton.addEventListener("click", () => showSetup("create"));
+homeJoinButton.addEventListener("click", () => showSetup("join"));
+setupBackButton.addEventListener("click", () => showLobby());
+
 createButton.addEventListener("click", () => {
   if (!nameInput.value.trim()) return showNotice("请先输入昵称");
   localStorage.setItem("mahjong-nickname", nameInput.value.trim());
@@ -2477,7 +2513,12 @@ renderAvatarGrid(avatarGrid, selectedAvatar, pickLobbyAvatar);
 const savedNickname = localStorage.getItem("mahjong-nickname");
 if (savedNickname) nameInput.value = savedNickname;
 const invitedRoom = new URLSearchParams(location.search).get("room");
-if (invitedRoom && /^\d{6}$/.test(invitedRoom)) codeInput.value = invitedRoom;
+if (invitedRoom && /^\d{6}$/.test(invitedRoom)) {
+  codeInput.value = invitedRoom;
+  showSetup("join");
+} else {
+  showLobby();
+}
 
 countdownTimer = window.setInterval(updateActionCountdown, 250);
 connect();

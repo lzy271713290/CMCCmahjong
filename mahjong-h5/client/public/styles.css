@@ -19,6 +19,11 @@ h2 { margin: 0 0 8px; font-size: 23px; }
 .status { padding: 7px 10px; border: 1px solid #3a7462; border-radius: 999px; color: #b8d5ca; background: rgba(5,30,25,.7); font-size: 12px; white-space: nowrap; }
 .status.offline { border-color: #89584b; color: #f4baa8; }
 .card { padding: 22px; border: 1px solid rgba(255,255,255,.12); border-radius: 20px; background: rgba(9,38,30,.78); box-shadow: 0 24px 70px rgba(0,0,0,.28); backdrop-filter: blur(14px); }
+.home-card { display: grid; gap: 14px; }
+.home-card h2 { margin-bottom: 2px; }
+.home-card .muted { margin-bottom: 16px; }
+.setup-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 2px; }
+.setup-header h2 { margin: 0; font-size: 24px; }
 .muted, .hint { color: #a9c2b8; }
 .muted { margin: 0 0 22px; }
 label { display: grid; gap: 8px; margin: 16px 0; color: #dbe7e2; font-size: 14px; }
