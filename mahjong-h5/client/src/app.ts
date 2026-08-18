@@ -701,6 +701,16 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
       speakerButton.setAttribute("aria-label", "喇叭");
       actions.append(micButton, speakerButton);
     }
+    if (position === "bottom") {
+      const chatButton = document.createElement("button");
+      chatButton.type = "button";
+      chatButton.className = "seat-action-btn";
+      chatButton.dataset.action = "chat";
+      chatButton.dataset.seat = String(player.seat);
+      chatButton.setAttribute("aria-label", "公屏聊天");
+      chatButton.innerHTML = iconSvg("chat");
+      actions.append(chatButton);
+    }
     if (position !== "bottom") {
       const throwControl = document.createElement("div");
       throwControl.className = "throw-control";
@@ -733,16 +743,6 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
     info.innerHTML = `<strong></strong><span><b>${role}</b> ${game.handTileCounts[player.seat] ?? 0}张 · ${next.scoreTotals[player.seat] ?? 100}分${player.isTestPlayer ? " · 测试" : player.autoManaged ? " · 托管" : ""}</span>`;
     info.querySelector("strong")!.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
     playerSeat.append(avatarBlock, info);
-    if (position === "bottom" && player.id === saved?.playerId) {
-      const chatEntry = document.createElement("button");
-      chatEntry.type = "button";
-      chatEntry.className = "self-chat-entry";
-      chatEntry.dataset.action = "chat";
-      chatEntry.dataset.seat = String(player.seat);
-      chatEntry.setAttribute("aria-label", "打开公屏聊天");
-      chatEntry.innerHTML = `${iconSvg("chat")}<span>公屏</span>`;
-      playerSeat.append(chatEntry);
-    }
 
     if (position !== "bottom") {
       const rack = document.createElement("div");
@@ -1875,8 +1875,6 @@ function renderChatHistory(): void {
 function setChatVisible(visible: boolean): void {
   publicChat.classList.toggle("hidden", !visible);
   chatToggleButton.classList.toggle("active", visible);
-  document.querySelectorAll<HTMLElement>(".self-chat-entry").forEach((entry) => entry.classList.toggle("active", visible));
-  if (visible) chatInput.focus();
 }
 
 function toggleMicFromSeat(): Promise<void> {
@@ -2454,7 +2452,7 @@ document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
   if (target.closest("button")) audioManager.playEffect("ui");
   if (!target.closest("#audio-settings") && !target.closest("#sound-toggle")) setAudioSettingsVisible(false);
-  if (!target.closest("#public-chat") && !target.closest("#chat-toggle") && !target.closest(".self-chat-entry")) setChatVisible(false);
+  if (!target.closest("#public-chat") && !target.closest("#chat-toggle")) setChatVisible(false);
 });
 
 function setAudioSettingsVisible(visible: boolean): void {
