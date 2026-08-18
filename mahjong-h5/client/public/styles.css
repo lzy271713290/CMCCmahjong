@@ -320,6 +320,24 @@ body.in-game .shell { display: none; }
 .score-summary > header strong { font-size: 19px; }
 .score-summary > header span { color: #b9d7cc; font-size: 10px; font-weight: 700; }
 .settlement-podium { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.settlement-winners { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
+.settlement-no-winner { padding: 12px 10px; border: 1px solid rgba(191,216,206,.22); border-radius: 10px; background: rgba(0,19,18,.32); color: #cfe3dc; font-size: 12px; font-weight: 800; }
+.winner-card { display: grid; gap: 6px; min-width: 0; padding: 11px 10px 9px; overflow: hidden; border: 1px solid #ffe18a; border-radius: 12px; background: linear-gradient(180deg, rgba(255,222,133,.34), rgba(157,99,20,.18) 56%, rgba(4,35,31,.88)); box-shadow: 0 0 18px rgba(255,216,110,.24), inset 0 0 14px rgba(255,226,138,.10); color: #fff2c0; text-align: left; }
+.winner-head { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.winner-avatar { width: 44px; height: 44px; flex: none; border: 2px solid #d9bd66; border-radius: 11px; object-fit: cover; background: linear-gradient(145deg, #f2d491, #96631e); }
+.winner-identity { display: grid; min-width: 0; flex: 1; gap: 2px; text-align: left; }
+.winner-identity strong { max-width: 100%; overflow: hidden; color: #fff8df; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.winner-reason { color: #ffd98e; font-size: 10px; font-weight: 800; }
+.winner-badge { flex: none; display: grid; min-width: 30px; height: 30px; place-items: center; padding: 0 5px; border-radius: 999px; background: #d9a72e; color: #3a2400; font-size: 12px; font-weight: 900; box-shadow: 0 0 8px rgba(255,216,110,.65); }
+.winner-score { font-size: 21px; line-height: 1.05; }
+.winner-score.positive { color: #ffd66f; }
+.winner-score.negative { color: #ff9c8c; }
+.winner-meta { display: flex; flex-wrap: wrap; gap: 8px; color: #cce7df; font-size: 10px; font-weight: 700; }
+.winner-fan { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: rgba(255,222,133,.10); }
+.winner-fan strong { flex: none; color: #ffe18a; font-size: 14px; }
+.winner-fan span { min-width: 0; color: #e7d29a; font-size: 10px; line-height: 1.35; }
+.winner-payer-list { display: grid; gap: 3px; }
+.winner-payer { display: block; padding: 4px 6px; border-radius: 6px; background: rgba(0,19,18,.34); color: #cfe1da; font-size: 9px; line-height: 1.35; text-align: left; }
 .result-player { position: relative; display: grid; justify-items: center; gap: 3px; min-width: 0; padding: 9px 4px 7px; overflow: hidden; border: 1px solid rgba(191,216,206,.22); border-radius: 10px; background: linear-gradient(180deg, rgba(94,127,118,.18), rgba(4,35,31,.72)); color: #d9e9e4; }
 .result-player.is-winner { border-color: #ffe18a; background: linear-gradient(180deg, rgba(255,222,133,.34), rgba(157,99,20,.22) 54%, rgba(4,35,31,.82)); box-shadow: 0 0 16px rgba(255,216,110,.28), inset 0 0 12px rgba(255,226,138,.12); color: #fff2c0; }
 .result-player.is-loser { border-color: rgba(224,148,126,.42); background: linear-gradient(180deg, rgba(115,73,67,.26), rgba(4,35,31,.78)); color: #d9c8c1; }
@@ -498,6 +516,16 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .score-summary > header strong { font-size: 13px; }
   .score-summary > header span { font-size: 8px; }
   .score-summary small { max-height: 24px; font-size: 8px; }
+  .settlement-winners { grid-template-columns: 1fr; gap: 5px; }
+  .winner-card { gap: 4px; padding: 8px 7px; }
+  .winner-avatar { width: 34px; height: 34px; border-radius: 9px; }
+  .winner-identity strong { font-size: 11px; }
+  .winner-score { font-size: 16px; }
+  .winner-meta { gap: 5px; font-size: 8px; }
+  .winner-fan { gap: 5px; padding: 4px 6px; }
+  .winner-fan strong { font-size: 12px; }
+  .winner-fan span { font-size: 8px; }
+  .winner-payer { font-size: 8px; }
   .settlement-scoreboard > div { grid-template-columns: 43px minmax(70px,1fr) 40px 48px; padding: 3px 6px; font-size: 9px; }
   .action-banner { padding: 7px 16px; font-size: 14px; }
   .action-banner.feedback-hu { padding: 11px 25px; font-size: 24px; }

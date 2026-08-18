@@ -833,32 +833,91 @@ function renderScoreSummary(next: RoomSnapshot): void {
   header.append(title, subtitle);
   scoreSummary.append(header);
 
-  const podium = document.createElement("div");
-  podium.className = "settlement-podium";
-  for (const player of [...next.players].sort((left, right) => left.seat - right.seat)) {
-    const delta = game.scoreDeltas[player.seat] ?? 0;
-    const isWinner = result.winnerSeats.includes(player.seat);
-    const card = document.createElement("div");
-    card.className = `result-player${isWinner ? " is-winner" : delta < 0 ? " is-loser" : " is-draw"}`;
-    const avatar = document.createElement("img");
-    avatar.className = "result-avatar";
-    avatar.src = avatarUrl(player.avatar);
-    avatar.alt = "";
-    const badge = document.createElement("span");
-    badge.className = "result-badge";
-    badge.textContent = isWinner ? "胜" : delta < 0 ? "负" : "平";
-    const name = document.createElement("strong");
-    name.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
-    const deltaText = document.createElement("span");
-    deltaText.className = `result-delta ${delta > 0 ? "positive" : delta < 0 ? "negative" : ""}`;
-    deltaText.textContent = `${delta >= 0 ? "+" : ""}${delta}`;
-    const total = document.createElement("span");
-    total.className = "result-total";
-    total.textContent = `累计 ${next.scoreTotals[player.seat] ?? next.match.startScore ?? 100}`;
-    card.append(avatar, badge, name, deltaText, total);
-    podium.append(card);
+  const winnerPayments = result.payments ?? game.scorePayments ?? [];
+  const winnerPanel = document.createElement("div");
+  winnerPanel.className = "settlement-winners";
+  if (result.winnerSeats.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "settlement-no-winner";
+    empty.textContent = "本局流局 · 无人得分";
+    winnerPanel.append(empty);
+  } else {
+    for (const winnerSeat of result.winnerSeats) {
+      const player = next.players.find((candidate) => candidate.seat === winnerSeat);
+      if (!player) continue;
+      const net = game.scoreDeltas[winnerSeat] ?? 0;
+      const total = next.scoreTotals[winnerSeat] ?? next.match.startScore ?? 100;
+      const huPayments = winnerPayments.filter((payment) => payment.toSeat === winnerSeat && ["self_draw", "discard_hu", "rob_kong_hu"].includes(payment.reason));
+      const huGain = huPayments.reduce((sum, payment) => sum + payment.amount, 0);
+      const fanFactors = new Set<ScoreFactor>();
+      const formulas: string[] = [];
+      for (const payment of huPayments) {
+        const formula = scoreFactorFormula(payment.factors);
+        for (const factor of payment.factors ?? []) {
+          if (!["base", "kong", "angang", "zhangmao", "closed_payer"].includes(factor)) fanFactors.add(factor);
+        }
+        if (formula && !formulas.includes(formula)) formulas.push(formula);
+      }
+      const reasonText = result.reason === "self_draw_hu" ? "自摸" : result.reason === "rob_kong_hu" ? "抢杠胡" : "点炮胡";
+      const card = document.createElement("div");
+      card.className = "winner-card";
+      const head = document.createElement("div");
+      head.className = "winner-head";
+      const avatar = document.createElement("img");
+      avatar.className = "winner-avatar";
+      avatar.src = avatarUrl(player.avatar);
+      avatar.alt = "";
+      const identity = document.createElement("div");
+      identity.className = "winner-identity";
+      const name = document.createElement("strong");
+      name.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
+      const reason = document.createElement("span");
+      reason.className = "winner-reason";
+      reason.textContent = reasonText;
+      identity.append(name, reason);
+      const badge = document.createElement("span");
+      badge.className = "winner-badge";
+      badge.textContent = "胜";
+      head.append(avatar, identity, badge);
+      const score = document.createElement("strong");
+      score.className = `winner-score ${net >= 0 ? "positive" : "negative"}`;
+      score.textContent = `本局 ${net >= 0 ? "+" : ""}${net} 分`;
+      const meta = document.createElement("div");
+      meta.className = "winner-meta";
+      const totalText = document.createElement("span");
+      totalText.textContent = `累计 ${total}`;
+      const huText = document.createElement("span");
+      huText.textContent = `胡牌入账 ${huGain >= 0 ? "+" : ""}${huGain} 分`;
+      meta.append(totalText, huText);
+      const fan = document.createElement("div");
+      fan.className = "winner-fan";
+      const fanCount = fanFactors.size;
+      const fanLabel = document.createElement("strong");
+      fanLabel.textContent = `${fanCount}番`;
+      const fanFormula = document.createElement("span");
+      fanFormula.textContent = formulas.join(" / ") || (scoreReasonLabels[result.reason] ?? reasonText);
+      fan.append(fanLabel, fanFormula);
+      const payerList = document.createElement("div");
+      payerList.className = "winner-payer-list";
+      if (huPayments.length === 0) {
+        const emptyPayment = document.createElement("span");
+        emptyPayment.textContent = "本局没有胡牌支付明细";
+        payerList.append(emptyPayment);
+      } else {
+        for (const payment of huPayments) {
+          const payer = next.players.find((candidate) => candidate.seat === payment.fromSeat);
+          const payerName = payer ? (payer.id === saved?.playerId ? `${payer.name}（我）` : payer.name) : `${payment.fromSeat + 1}号位`;
+          const row = document.createElement("span");
+          row.className = "winner-payer";
+          row.textContent = `${payerName} -${payment.amount}分 · ${scoreReasonLabels[payment.reason] ?? payment.reason} · ${scoreFactorFormula(payment.factors)}`;
+          payerList.append(row);
+        }
+      }
+      card.append(head, score, meta, fan, payerList);
+      winnerPanel.append(card);
+    }
   }
-  scoreSummary.append(podium);
+  scoreSummary.append(winnerPanel);
 
   const scoreboard = document.createElement("div");
   scoreboard.className = "settlement-matrix";
