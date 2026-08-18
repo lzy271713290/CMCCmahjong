@@ -350,14 +350,22 @@ function handleMessage(message: ServerMessage): void {
       && message.snapshot.game
       && message.snapshot.game.wallRemaining < previous.game.wallRemaining,
     );
+    const isViewerDraw = Boolean(
+      message.snapshot.game
+      && message.snapshot.game.stage === "awaiting_discard"
+      && message.snapshot.game.viewerSeat !== undefined
+      && message.snapshot.game.turnSeat === message.snapshot.game.viewerSeat,
+    );
     if (preCollectDraw) {
       collectSnapshotFeedback(previous, message.snapshot);
-      scheduleDelayedDrawRender(message.snapshot, 620);
-      return;
+      if (isViewerDraw) {
+        scheduleDelayedDrawRender(message.snapshot, 620);
+        return;
+      }
     }
     clearDelayedDrawRender();
     render(message.snapshot);
-    collectSnapshotFeedback(previous, message.snapshot);
+    if (!preCollectDraw) collectSnapshotFeedback(previous, message.snapshot);
   } else if (message.type === "error") {
     clearPendingRequest();
     if (message.code === "ROOM_NOT_FOUND" || message.code === "TOKEN_INVALID") {

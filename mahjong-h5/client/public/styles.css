@@ -429,14 +429,14 @@ body.in-game .shell { display: none; }
 
 .self-area { position: absolute; z-index: 25; right: 12%; bottom: 1%; left: 24%; display: flex; align-items: flex-end; justify-content: center; gap: 12px; }
 .self-hand { display: flex; flex: 0 0 auto; align-items: flex-end; justify-content: center; gap: 1px; min-height: 48px; filter: drop-shadow(0 8px 7px rgba(0,0,0,.42)); }
-.self-hand.drawing { pointer-events: none; opacity: .72; }
+.self-hand.drawing { pointer-events: none; }
 .tile-shell { position: relative; display: block; flex: 0 0 auto; overflow: visible; padding: 0; border: 0; border-radius: 4px; background: transparent; }
 button.tile-shell { width: auto; color: inherit; cursor: pointer; }
 .tile-face { position: absolute; top: 0; left: 0; display: block; width: 55px; height: 84px; transform: scale(var(--tile-scale)); transform-origin: top left; background: url("/assets/babykylin/MJ/bottom/Z_bottom.png") no-repeat; }
 .hand-tile { --tile-scale: .58; width: 32px !important; height: 48px; transition: transform .12s ease, filter .12s ease; }
 .hand-tile.restricted { opacity: .38; filter: saturate(.25) drop-shadow(0 2px 2px rgba(0,0,0,.28)); cursor: not-allowed; }
 button.hand-tile:hover, button.hand-tile:focus-visible { z-index: 4; outline: none; transform: translateY(-9px); filter: drop-shadow(0 7px 5px rgba(244,220,112,.65)); }
-button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
+button.hand-tile:disabled { cursor: default; }
 .hand-tile.drawn { margin-left: 8px; transform: translateY(-4px); }
 .hand-tile.drawn .tile-face { animation: drawn-tile-in .28s ease-out both; }
 .hand-tile.discarding { z-index: 8; animation: hand-discard .2s ease-in both; }
