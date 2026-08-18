@@ -26,6 +26,9 @@ export type InitialGameState = {
   stage: "awaiting_discard" | "awaiting_reactions" | "round_ended";
   hands: Map<number, Tile[]>;
   wall: Tile[];
+  wallCounts?: number[];
+  wallFrontIndex?: number;
+  wallBackIndex?: number;
   discards: DiscardView[];
   melds: Map<number, MeldView[]>;
   lastDraw?: { seat: number; tile: Tile };
@@ -118,6 +121,7 @@ export function createInitialGame(
   for (const seat of seats) draw(seat, 1);
   const dealerDraw = draw(dealerSeat, 1)[0]!;
 
+  const wallCounts = buildWallCounts(wall.length);
   const game: InitialGameState = {
     modelVersion: GAME_MODEL_VERSION,
     roundNumber,
@@ -126,6 +130,9 @@ export function createInitialGame(
     stage: "awaiting_discard",
     hands,
     wall,
+    wallCounts,
+    wallFrontIndex: 0,
+    wallBackIndex: wallCounts.length - 1,
     discards: [],
     melds: new Map(seats.map((seat) => [seat, [] as MeldView[]])),
     scorePayments: [],
@@ -136,14 +143,35 @@ export function createInitialGame(
   return game;
 }
 
+function buildWallCounts(length: number): number[] {
+  const baseCount = Math.floor(length / 4);
+  const extraCount = length % 4;
+  return Array.from({ length: 4 }, (_, index) => baseCount + (index < extraCount ? 1 : 0));
+}
+export function wallCountsForGame(game: InitialGameState): number[] {
+  return game.wallCounts ? [...game.wallCounts] : buildWallCounts(game.wall.length);
+}
 export function drawTileFromWall(game: InitialGameState, seat: number): Tile | undefined {
-  const tile = game.wall.shift();
+  const counts = wallCountsForGame(game);
+  let frontIndex = game.wallFrontIndex ?? 0;
+  while (frontIndex < counts.length && (counts[frontIndex] ?? 0) <= 0) frontIndex += 1;
+  if (frontIndex >= counts.length || (counts[frontIndex] ?? 0) <= 0) {
+    game.stage = "round_ended";
+    game.lastDraw = undefined;
+    game.roundResult = { reason: "wall_exhausted", winnerSeats: [] };
+    return undefined;
+  }
+  const offset = counts.slice(0, frontIndex).reduce((sum, count) => sum + count, 0);
+  const tile = game.wall.splice(offset, 1)[0];
   if (!tile) {
     game.stage = "round_ended";
     game.lastDraw = undefined;
     game.roundResult = { reason: "wall_exhausted", winnerSeats: [] };
     return undefined;
   }
+  counts[frontIndex] = (counts[frontIndex] ?? 0) - 1;
+  game.wallCounts = counts;
+  game.wallFrontIndex = frontIndex;
   const hand = game.hands.get(seat);
   if (!hand) throw new Error("摸牌目标座位不存在");
   hand.push(tile);
@@ -154,13 +182,26 @@ export function drawTileFromWall(game: InitialGameState, seat: number): Tile | u
 }
 
 export function drawTileFromWallEnd(game: InitialGameState, seat: number): Tile | undefined {
-  const tile = game.wall.pop();
+  const counts = wallCountsForGame(game);
+  let backIndex = game.wallBackIndex ?? counts.length - 1;
+  while (backIndex >= 0 && (counts[backIndex] ?? 0) <= 0) backIndex -= 1;
+  if (backIndex < 0 || (counts[backIndex] ?? 0) <= 0) {
+    game.stage = "round_ended";
+    game.lastDraw = undefined;
+    game.roundResult = { reason: "wall_exhausted", winnerSeats: [] };
+    return undefined;
+  }
+  const offset = counts.slice(0, backIndex).reduce((sum, count) => sum + count, 0);
+  const tile = game.wall.splice(offset + (counts[backIndex] ?? 0) - 1, 1)[0];
   if (!tile) {
     game.stage = "round_ended";
     game.lastDraw = undefined;
     game.roundResult = { reason: "wall_exhausted", winnerSeats: [] };
     return undefined;
   }
+  counts[backIndex] = (counts[backIndex] ?? 0) - 1;
+  game.wallCounts = counts;
+  game.wallBackIndex = backIndex;
   const hand = game.hands.get(seat);
   if (!hand) throw new Error("补牌目标座位不存在");
   hand.push(tile);

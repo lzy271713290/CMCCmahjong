@@ -248,8 +248,14 @@ test("只有庄家可以从自己的手牌中执行首次出牌", () => {
   assert.equal(afterSecondPasses.game?.wallRemaining, 81);
 });
 
-test("单人联调时测试玩家自动完成回合并把出牌权还给真人", () => {
-  const rooms = new RoomManager(undefined, undefined, undefined, undefined, { testPlayerTurnMs: 0 });
+test("单人联调时测试玩家会自动碰吃并最终把出牌权还给真人", () => {
+  const rooms = new RoomManager(
+    () => 0,
+    (seats, dealerSeat, randomIndex, roundNumber) => createInitialGame(seats, 0, randomIndex, roundNumber),
+    undefined,
+    undefined,
+    { testPlayerTurnMs: 0 },
+  );
   const host = rooms.createRoom("单人联调");
   rooms.fillWithTestPlayers(host.roomCode, host.playerToken);
   rooms.setReady(host.roomCode, host.playerToken, true);
@@ -259,31 +265,21 @@ test("单人联调时测试玩家自动完成回合并把出牌权还给真人",
 
   const progressed = rooms.discardTile(host.roomCode, host.playerToken, tile);
   let finalSnapshot = progressed.snapshot;
-  const automaticDiscards = [...progressed.diagnostics.autoDiscards];
   while (finalSnapshot.game?.stage === "awaiting_reactions") {
     const hostReaction = rooms.snapshotForPlayer(host.roomCode, host.playerToken).game?.availableOperations;
     assert.ok(hostReaction?.length);
-    const passed = rooms.reactToDiscard(host.roomCode, host.playerToken, "pass");
-    automaticDiscards.push(...passed.diagnostics.autoDiscards);
-    finalSnapshot = passed.snapshot;
+    finalSnapshot = rooms.reactToDiscard(host.roomCode, host.playerToken, "pass").snapshot;
   }
 
-  assert.equal(automaticDiscards.length, 3);
   assert.equal(progressed.diagnostics.initialDiscard.handTileCount, 13);
-  assert.deepEqual(
-    automaticDiscards.map((discard) => discard.wallRemaining),
-    [82, 81, 80],
-  );
   assert.equal(finalSnapshot.game?.stage, "awaiting_discard");
   assert.equal(finalSnapshot.game?.turnSeat, 0);
-  assert.equal(finalSnapshot.game?.wallRemaining, 79);
-  assert.deepEqual(finalSnapshot.game?.handTileCounts, [14, 13, 13, 13]);
-  assert.equal(finalSnapshot.game?.discards.length, 4);
+  assert.equal(finalSnapshot.game?.handTileCounts[0], 14);
   assert.equal(rooms.snapshotForPlayer(host.roomCode, host.playerToken).game?.selfHand?.length, 14);
+  assert.ok(finalSnapshot.publicActions.some((action) => action.kind === "chi"));
 });
 
-
-test("测试玩家坐庄时会自动完成出牌并把回合交给真人", () => {
+test("测试玩家坐庄时会自动出牌并智能响应当前弃牌", () => {
   const rooms = new RoomManager(
     () => 0,
     (seats, dealerSeat, randomIndex, roundNumber) => createInitialGame(seats, 2, randomIndex, roundNumber),
@@ -296,11 +292,12 @@ test("测试玩家坐庄时会自动完成出牌并把回合交给真人", () =>
   rooms.setReady(host.roomCode, host.playerToken, true);
   const started = rooms.startGame(host.roomCode, host.playerToken);
   assert.equal(started.game?.dealerSeat, 2);
-  assert.equal(started.game?.stage, "awaiting_discard");
-  assert.equal(started.game?.turnSeat, 0);
-  assert.equal(started.game?.discards.length, 2);
-  assert.deepEqual(started.game?.handTileCounts, [14, 13, 13, 13]);
-  assert.equal(rooms.snapshotForPlayer(started.roomCode, host.playerToken).game?.selfHand?.length, 14);
+  assert.equal(started.game?.stage, "awaiting_reactions");
+  assert.equal(started.game?.turnSeat, 3);
+  assert.equal(started.game?.discards.length, 1);
+  assert.deepEqual(started.game?.handTileCounts, [13, 13, 13, 10]);
+  assert.equal(rooms.snapshotForPlayer(started.roomCode, host.playerToken).game?.selfHand?.length, 13);
+  assert.ok(started.publicActions.some((action) => action.kind === "chi"));
 });
 
 test("测试玩家出牌按节奏延迟，不会瞬间连打", () => {
@@ -329,13 +326,13 @@ test("测试玩家出牌按节奏延迟，不会瞬间连打", () => {
   assert.equal(firstTick.length, 1);
   assert.equal(firstTick[0]?.events[0]?.kind, "test_player_auto_discard");
   assert.equal(firstTick[0]?.snapshot.game?.turnSeat, 3);
-  assert.equal(firstTick[0]?.snapshot.game?.discards.length, 1);
+  assert.equal(firstTick[0]?.snapshot.game?.discards.length, 0);
 
   current += 1500;
   const secondTick = rooms.processGovernance();
   assert.equal(secondTick.length, 1);
-  assert.equal(secondTick[0]?.snapshot.game?.turnSeat, 0);
-  assert.equal(secondTick[0]?.snapshot.game?.discards.length, 2);
+  assert.equal(secondTick[0]?.snapshot.game?.turnSeat, 3);
+  assert.equal(secondTick[0]?.snapshot.game?.discards.length, 1);
 });
 
 function createDeterministicFourPlayerGame(): { rooms: RoomManager; sessions: Session[]; started: RoomSnapshot } {

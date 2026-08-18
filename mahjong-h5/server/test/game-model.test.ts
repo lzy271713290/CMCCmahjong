@@ -14,6 +14,7 @@ import {
   selectReactionClaims,
   sortTiles,
   validateInitialGame,
+  wallCountsForGame,
   type Tile,
 } from "../src/game-model.js";
 
@@ -44,6 +45,25 @@ test("起手牌按万筒条和字牌稳定排序", () => {
     { code: "tong-2", copy: 0 },
   ]);
   assert.deepEqual(sorted.map((tile) => tile.code), ["wan-1", "wan-9", "tong-2", "tiao-1", "white"]);
+});
+
+test("普通摸牌先清空第一段牌墙再进入下一段", () => {
+  const game = createInitialGame([0, 1, 2, 3], 0, () => 0);
+  assert.deepEqual(wallCountsForGame(game), [21, 21, 21, 20]);
+
+  for (let index = 0; index < 21; index += 1) {
+    const drawn = drawTileFromWall(game, 1);
+    assert.ok(drawn);
+  }
+
+  assert.deepEqual(wallCountsForGame(game), [0, 21, 21, 20]);
+  assert.equal(game.wall.length, 62);
+  assert.equal(game.wallFrontIndex, 0);
+
+  const nextSegmentTile = drawTileFromWall(game, 1);
+  assert.ok(nextSegmentTile);
+  assert.deepEqual(wallCountsForGame(game), [0, 20, 21, 20]);
+  assert.equal(game.wallFrontIndex, 1);
 });
 
 test("最小开局模型满足四人发牌和牌张守恒", () => {

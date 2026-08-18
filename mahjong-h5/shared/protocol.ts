@@ -164,6 +164,7 @@ export type RoomSnapshot = {
     turnSeat: number;
     stage: "awaiting_discard" | "awaiting_reactions" | "round_ended";
     wallRemaining: number;
+    wallRemainingBySeat: number[];
     handTileCounts: number[];
     actionDeadlineAt?: number;
     actionTimeoutSeconds?: number;

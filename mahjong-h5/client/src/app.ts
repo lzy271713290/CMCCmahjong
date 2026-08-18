@@ -541,7 +541,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   wallStatus.textContent = String(game.wallRemaining);
   renderPlayers(next, viewerSeat);
   renderSpectatorStrip(next);
-  renderWalls(game.wallRemaining);
+  renderWalls(game.wallRemaining, game.wallRemainingBySeat, viewerSeat);
   renderDiscards(game.discards, viewerSeat);
   renderCenter(game.dealerSeat, game.turnSeat, viewerSeat);
   renderOperations(game.availableOperations ?? [], game.availableTurnOperations ?? []);
@@ -1044,13 +1044,14 @@ function renderScoreSummary(next: RoomSnapshot): void {
   if (footer.childElementCount > 0) scoreSummary.append(footer);
 }
 
-function renderWalls(remaining: number): void {
+function renderWalls(remaining: number, wallCounts: number[] | undefined, viewerSeat: number): void {
   const baseCount = Math.floor(remaining / positions.length);
   const extraCount = remaining % positions.length;
   positions.forEach((position, wallIndex) => {
     const wall = required<HTMLElement>(`wall-${position}`);
     wall.replaceChildren();
-    const count = baseCount + (wallIndex < extraCount ? 1 : 0);
+    const absoluteSeat = (viewerSeat + wallIndex) % 4;
+    const count = wallCounts?.[absoluteSeat] ?? baseCount + (wallIndex < extraCount ? 1 : 0);
     const isSide = position === "left" || position === "right";
     const deck = document.createElement("div");
     deck.className = isSide ? "wall-deck wall-deck-side" : "wall-deck";
