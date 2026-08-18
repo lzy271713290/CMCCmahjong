@@ -187,8 +187,10 @@ let historyCursor = 0;
 let historyPlaybackTimer: number | undefined;
 let countdownTimer: number | undefined;
 let lastCountdownAlarmKey = "";
-const AVATAR_IDS = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10"];
+const AVATAR_IDS = ["a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9", "a10", "a11", "a12", "a13", "a14", "a15", "a16", "a17", "a18", "a19", "a20", "a21", "a22"];
 let selectedAvatar = localStorage.getItem("mahjong-avatar") ?? "a1";
+let drawRenderTimer: number | undefined;
+let delayedDrawSnapshot: RoomSnapshot | undefined;
 let avatarDraft = selectedAvatar;
 if (!AVATAR_IDS.includes(selectedAvatar)) selectedAvatar = "a1";
 type ChatEntry = { seat?: number; senderId: string; senderName: string; senderAvatar: string; text: string; emote: boolean; ts: number };
@@ -209,7 +211,8 @@ function required<T extends HTMLElement>(id: string): T {
 
 function avatarUrl(avatar: string): string {
   const id = AVATAR_IDS.includes(avatar) ? avatar : "a1";
-  return `/assets/avatars/avatar-${id.slice(1)}.svg`;
+  const extension = Number(id.slice(1)) >= 11 ? "png" : "svg";
+  return `/assets/avatars/avatar-${id.slice(1)}.${extension}`;
 }
 
 function iconSvg(name: "mic" | "mic-off" | "volume" | "volume-x" | "chat" | "slipper"): string {
@@ -324,6 +327,7 @@ function send(message: object, trackRequest = true): boolean {
 
 function handleMessage(message: ServerMessage): void {
   if (message.type === "session") {
+    clearDelayedDrawRender();
     clearPendingRequest();
     if (snapshot?.roomCode !== message.roomCode) chatHistory.length = 0;
     voiceChannel.reset();
@@ -346,9 +350,14 @@ function handleMessage(message: ServerMessage): void {
       && message.snapshot.game
       && message.snapshot.game.wallRemaining < previous.game.wallRemaining,
     );
-    if (preCollectDraw) collectSnapshotFeedback(previous, message.snapshot);
+    if (preCollectDraw) {
+      collectSnapshotFeedback(previous, message.snapshot);
+      scheduleDelayedDrawRender(message.snapshot, 340);
+      return;
+    }
+    clearDelayedDrawRender();
     render(message.snapshot);
-    if (!preCollectDraw) collectSnapshotFeedback(previous, message.snapshot);
+    collectSnapshotFeedback(previous, message.snapshot);
   } else if (message.type === "error") {
     clearPendingRequest();
     if (message.code === "ROOM_NOT_FOUND" || message.code === "TOKEN_INVALID") {
@@ -360,6 +369,7 @@ function handleMessage(message: ServerMessage): void {
     updateNetworkOverlay(false);
     showNotice(message.message);
   } else if (message.type === "left_room") {
+    clearDelayedDrawRender();
     clearPendingRequest();
     voiceChannel.reset();
     voiceStates.clear();
@@ -372,6 +382,7 @@ function handleMessage(message: ServerMessage): void {
     showLobby();
     showNotice("已退出房间");
   } else if (message.type === "room_closed") {
+    clearDelayedDrawRender();
     clearPendingRequest();
     voiceChannel.reset();
     voiceStates.clear();
@@ -439,6 +450,26 @@ function render(next: RoomSnapshot): void {
   renderPendingState();
 }
 
+function clearDelayedDrawRender(): void {
+  if (drawRenderTimer !== undefined) window.clearTimeout(drawRenderTimer);
+  drawRenderTimer = undefined;
+  delayedDrawSnapshot = undefined;
+  selfHand.classList.remove("drawing");
+}
+
+function scheduleDelayedDrawRender(next: RoomSnapshot, delay: number): void {
+  clearDelayedDrawRender();
+  delayedDrawSnapshot = next;
+  turnStatus.textContent = "摸牌中...";
+  selfHand.classList.add("drawing");
+  drawRenderTimer = window.setTimeout(() => {
+    drawRenderTimer = undefined;
+    const pending = delayedDrawSnapshot;
+    delayedDrawSnapshot = undefined;
+    selfHand.classList.remove("drawing");
+    if (pending) render(pending);
+  }, delay);
+}
 function renderWaitingTable(next: RoomSnapshot, me: PlayerView | undefined, spectator: { id: string; name: string; avatar: string; connected: boolean; requestingSeat: boolean } | undefined): void {
   waitingControls.classList.remove("hidden");
   const viewerSeat = me?.seat ?? 0;
@@ -664,23 +695,29 @@ function renderPlayers(next: RoomSnapshot, viewerSeat: number): void {
       actions.append(chatButton);
     }
     if (position !== "bottom") {
-      const throwSelect = document.createElement("select");
-      throwSelect.className = "seat-throw-select";
-      throwSelect.dataset.action = "throw";
-      throwSelect.dataset.seat = String(player.seat);
-      throwSelect.setAttribute("aria-label", `向 ${player.name} 丢东西`);
-      throwSelect.title = `向 ${player.name} 丢东西`;
-      const placeholder = document.createElement("option");
-      placeholder.value = "";
-      placeholder.textContent = "丢";
-      throwSelect.append(placeholder);
+      const throwControl = document.createElement("div");
+      throwControl.className = "throw-control";
+      const throwButton = document.createElement("button");
+      throwButton.type = "button";
+      throwButton.className = "seat-action-btn throw-action";
+      throwButton.dataset.action = "throw";
+      throwButton.dataset.seat = String(player.seat);
+      throwButton.textContent = "丢";
+      throwButton.title = `向 ${player.name} 丢东西`;
+      const throwMenu = document.createElement("div");
+      throwMenu.className = "throw-menu";
       for (const throwable of THROWABLES) {
-        const option = document.createElement("option");
-        option.value = throwable.id;
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = "throw-menu-button";
+        option.dataset.action = "throw-option";
+        option.dataset.seat = String(player.seat);
+        option.dataset.throwable = throwable.id;
         option.textContent = `${throwable.emote} ${throwable.label}`;
-        throwSelect.append(option);
+        throwMenu.append(option);
       }
-      actions.append(throwSelect);
+      throwControl.append(throwButton, throwMenu);
+      actions.append(throwControl);
     }
     avatarBlock.append(avatar, actions);
     const info = document.createElement("div");
@@ -873,21 +910,54 @@ function renderScoreSummary(next: RoomSnapshot): void {
   header.append(title, subtitle);
   scoreSummary.append(header);
 
+  const viewerPlayer = next.players.find((player) => player.id === saved?.playerId);
   const winnerPayments = result.payments ?? game.scorePayments ?? [];
-  const winnerPanel = document.createElement("div");
-  winnerPanel.className = "settlement-winners";
-  if (result.winnerSeats.length === 0) {
-    const empty = document.createElement("div");
-    empty.className = "settlement-no-winner";
-    empty.textContent = "本局流局 · 无人得分";
-    winnerPanel.append(empty);
+  const selfPanel = document.createElement("div");
+  selfPanel.className = "settlement-winners";
+  if (!viewerPlayer) {
+    const spectatorCard = document.createElement("div");
+    spectatorCard.className = "self-result-card is-spectator";
+    const title = document.createElement("strong");
+    title.textContent = "观战视角";
+    const detail = document.createElement("span");
+    detail.textContent = result.winnerSeats.length > 0 ? "本局已有玩家胡牌" : "本局流局";
+    spectatorCard.append(title, detail);
+    selfPanel.append(spectatorCard);
   } else {
-    for (const winnerSeat of result.winnerSeats) {
-      const player = next.players.find((candidate) => candidate.seat === winnerSeat);
-      if (!player) continue;
-      const net = game.scoreDeltas[winnerSeat] ?? 0;
-      const total = next.scoreTotals[winnerSeat] ?? next.match.startScore ?? 100;
-      const huPayments = winnerPayments.filter((payment) => payment.toSeat === winnerSeat && ["self_draw", "discard_hu", "rob_kong_hu"].includes(payment.reason));
+    const net = game.scoreDeltas[viewerPlayer.seat] ?? 0;
+    const total = next.scoreTotals[viewerPlayer.seat] ?? next.match.startScore ?? 100;
+    const isWinner = result.winnerSeats.includes(viewerPlayer.seat);
+    const card = document.createElement("div");
+    card.className = `self-result-card ${net > 0 ? "is-winner" : net < 0 ? "is-loss" : "is-draw"}`;
+    const head = document.createElement("div");
+    head.className = "winner-head";
+    const avatar = document.createElement("img");
+    avatar.className = "winner-avatar";
+    avatar.src = avatarUrl(viewerPlayer.avatar);
+    avatar.alt = "";
+    const identity = document.createElement("div");
+    identity.className = "winner-identity";
+    const name = document.createElement("strong");
+    name.textContent = `${viewerPlayer.name}（我）`;
+    const reason = document.createElement("span");
+    reason.className = "winner-reason";
+    reason.textContent = isWinner ? (result.reason === "self_draw_hu" ? "自摸" : result.reason === "rob_kong_hu" ? "抢杠胡" : "点炮胡") : (net > 0 ? "本局得分" : net < 0 ? "本局失分" : "本局打平");
+    identity.append(name, reason);
+    const badge = document.createElement("span");
+    badge.className = "winner-badge";
+    badge.textContent = net > 0 ? "胜" : net < 0 ? "负" : "平";
+    head.append(avatar, identity, badge);
+    const score = document.createElement("strong");
+    score.className = `winner-score ${net >= 0 ? "positive" : "negative"}`;
+    score.textContent = `本局 ${net >= 0 ? "+" : ""}${net} 分`;
+    const meta = document.createElement("div");
+    meta.className = "winner-meta";
+    const totalText = document.createElement("span");
+    totalText.textContent = `累计 ${total}`;
+    meta.append(totalText);
+    card.append(head, score, meta);
+    if (isWinner) {
+      const huPayments = winnerPayments.filter((payment) => payment.toSeat === viewerPlayer.seat && ["self_draw", "discard_hu", "rob_kong_hu"].includes(payment.reason));
       const huGain = huPayments.reduce((sum, payment) => sum + payment.amount, 0);
       const fanFactors = new Set<ScoreFactor>();
       const formulas: string[] = [];
@@ -898,44 +968,16 @@ function renderScoreSummary(next: RoomSnapshot): void {
         }
         if (formula && !formulas.includes(formula)) formulas.push(formula);
       }
-      const reasonText = result.reason === "self_draw_hu" ? "自摸" : result.reason === "rob_kong_hu" ? "抢杠胡" : "点炮胡";
-      const card = document.createElement("div");
-      card.className = "winner-card";
-      const head = document.createElement("div");
-      head.className = "winner-head";
-      const avatar = document.createElement("img");
-      avatar.className = "winner-avatar";
-      avatar.src = avatarUrl(player.avatar);
-      avatar.alt = "";
-      const identity = document.createElement("div");
-      identity.className = "winner-identity";
-      const name = document.createElement("strong");
-      name.textContent = player.id === saved?.playerId ? `${player.name}（我）` : player.name;
-      const reason = document.createElement("span");
-      reason.className = "winner-reason";
-      reason.textContent = reasonText;
-      identity.append(name, reason);
-      const badge = document.createElement("span");
-      badge.className = "winner-badge";
-      badge.textContent = "胜";
-      head.append(avatar, identity, badge);
-      const score = document.createElement("strong");
-      score.className = `winner-score ${net >= 0 ? "positive" : "negative"}`;
-      score.textContent = `本局 ${net >= 0 ? "+" : ""}${net} 分`;
-      const meta = document.createElement("div");
-      meta.className = "winner-meta";
-      const totalText = document.createElement("span");
-      totalText.textContent = `累计 ${total}`;
       const huText = document.createElement("span");
       huText.textContent = `胡牌入账 ${huGain >= 0 ? "+" : ""}${huGain} 分`;
-      meta.append(totalText, huText);
+      meta.append(huText);
       const fan = document.createElement("div");
       fan.className = "winner-fan";
       const fanCount = fanFactors.size;
       const fanLabel = document.createElement("strong");
       fanLabel.textContent = `${fanCount}番`;
       const fanFormula = document.createElement("span");
-      fanFormula.textContent = formulas.join(" / ") || (scoreReasonLabels[result.reason] ?? reasonText);
+      fanFormula.textContent = formulas.join(" / ") || (scoreReasonLabels[result.reason] ?? "胡牌");
       fan.append(fanLabel, fanFormula);
       const payerList = document.createElement("div");
       payerList.className = "winner-payer-list";
@@ -953,11 +995,11 @@ function renderScoreSummary(next: RoomSnapshot): void {
           payerList.append(row);
         }
       }
-      card.append(head, score, meta, fan, payerList);
-      winnerPanel.append(card);
+      card.append(fan, payerList);
     }
+    selfPanel.append(card);
   }
-  scoreSummary.append(winnerPanel);
+  scoreSummary.append(selfPanel);
 
   const scoreboard = document.createElement("div");
   scoreboard.className = "settlement-matrix";
@@ -1227,6 +1269,7 @@ function renderCenter(dealerSeat: number, turnSeat: number, viewerSeat: number):
 }
 
 function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canDiscard: boolean, restrictedTile?: TileCode): void {
+  selfHand.classList.remove("drawing");
   selfHand.replaceChildren();
   const hand = [...tiles];
   let drawn: TileCode | undefined;
@@ -1837,6 +1880,8 @@ function playThrowableThrow(fromSeat: number | undefined, fromId: string, toSeat
   const startY = startRect.top + startRect.height / 2 - 22;
   const endX = endRect.left + endRect.width / 2 - 22;
   const endY = endRect.top + endRect.height / 2 - 22;
+  const impactX = endRect.left + endRect.width / 2;
+  const impactY = endRect.top + endRect.height / 2;
   const projectile = document.createElement("div");
   projectile.className = "flying-slipper flying-throwable";
   projectile.textContent = throwable.emote;
@@ -1851,7 +1896,7 @@ function playThrowableThrow(fromSeat: number | undefined, fromId: string, toSeat
     if (settled) return;
     settled = true;
     projectile.remove();
-    showImpactBurst(endX + 22, endY + 22, throwable.impact);
+    showImpactBurst(impactX, impactY, throwable.impact);
   };
   projectile.addEventListener("animationend", finish, { once: true });
   window.setTimeout(finish, 850);
@@ -2236,6 +2281,10 @@ voiceGenderGameSelect.addEventListener("change", () => {
   syncAudioSettingsUI();
 });
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
+function closeThrowMenus(): void {
+  document.querySelectorAll<HTMLElement>(".throw-menu.open").forEach((menu) => menu.classList.remove("open"));
+}
+
 tableSeats.addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-action]");
   if (!button) return;
@@ -2243,12 +2292,24 @@ tableSeats.addEventListener("click", (event) => {
   if (action === "mic") void toggleMicFromSeat();
   else if (action === "speaker") toggleSpeakerFromSeat();
   else if (action === "chat") setChatVisible(publicChat.classList.contains("hidden"));
+  else if (action === "throw") {
+    const control = button.closest<HTMLElement>(".throw-control");
+    const menu = control?.querySelector<HTMLElement>(".throw-menu");
+    const wasOpen = menu?.classList.contains("open") ?? false;
+    closeThrowMenus();
+    if (menu && !wasOpen) menu.classList.add("open");
+  } else if (action === "throw-option") {
+    const targetSeat = Number(button.dataset.seat);
+    const throwable = button.dataset.throwable as ThrowableId | undefined;
+    closeThrowMenus();
+    if (Number.isInteger(targetSeat) && throwable && THROWABLES.some((item) => item.id === throwable)) {
+      throwAtSeat(targetSeat, throwable);
+    }
+  }
 });
-tableSeats.addEventListener("change", (event) => {
-  const select = (event.target as HTMLElement).closest<HTMLSelectElement>("[data-action=\"throw\"]");
-  if (!select?.value || !select.dataset.seat) return;
-  throwAtSeat(Number(select.dataset.seat), select.value as ThrowableId);
-  select.value = "";
+
+document.addEventListener("click", (event) => {
+  if (!(event.target as HTMLElement).closest(".throw-control")) closeThrowMenus();
 });
 chatToggleButton.addEventListener("click", () => setChatVisible(publicChat.classList.contains("hidden")));
 chatCloseButton.addEventListener("click", () => setChatVisible(false));
