@@ -270,6 +270,13 @@ function broadcastChatEmote(roomCode: string, sender: { id: string; name: string
   }
 }
 
+function broadcastChatVoice(roomCode: string, sender: { id: string; name: string; avatar: string; seat?: number }, voice: string): void {
+  const payload: ServerMessage = { type: "chat_voice", fromSeat: sender.seat, fromId: sender.id, fromName: sender.name, fromAvatar: sender.avatar, voice: voice.slice(0, 120) };
+  for (const [socket, session] of sessionsBySocket) {
+    if (session.roomCode !== roomCode) continue;
+    send(socket, payload);
+  }
+}
 function announceToRoom(roomCode: string, messageText: string): number {
   let recipients = 0;
   for (const [socket, session] of sessionsBySocket) {
@@ -514,6 +521,14 @@ webSockets.on("connection", (socket) => {
           if (!emote) throw new RoomError("EMOTE_EMPTY", "表情不能为空");
           const sender = manager.participant(session.roomCode, session.playerToken);
           broadcastChatEmote(session.roomCode, { ...sender, seat: session.seat }, emote, typeof message.toSeat === "number" ? message.toSeat : undefined);
+          break;
+        }
+        case "chat_voice": {
+          const session = requireSession(socket);
+          const voice = typeof message.voice === "string" ? message.voice.trim() : "";
+          if (!voice) throw new RoomError("CHAT_VOICE_EMPTY", "快捷语音不能为空");
+          const sender = manager.participant(session.roomCode, session.playerToken);
+          broadcastChatVoice(session.roomCode, { ...sender, seat: session.seat }, voice);
           break;
         }
         case "start_next_round": {

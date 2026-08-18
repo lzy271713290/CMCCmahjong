@@ -211,6 +211,7 @@ export type ClientMessage =
   | { type: "voice_state"; micOn: boolean; speakerOn: boolean }
   | { type: "chat_message"; text: string }
   | { type: "chat_emote"; emote: string; toSeat?: number }
+  | { type: "chat_voice"; voice: string }
   | { type: "ping" };
 
 export type ServerMessage =
@@ -229,5 +230,6 @@ export type ServerMessage =
   | { type: "voice_state"; fromSeat: number; micOn: boolean; speakerOn: boolean }
   | { type: "chat_message"; fromSeat?: number; fromId: string; fromName: string; fromAvatar: string; text: string }
   | { type: "chat_emote"; fromSeat?: number; fromId: string; fromName: string; fromAvatar: string; emote: string; toSeat?: number }
+  | { type: "chat_voice"; fromSeat?: number; fromId: string; fromName: string; fromAvatar: string; voice: string }
   | { type: "error"; code: string; message: string }
   | { type: "pong" };

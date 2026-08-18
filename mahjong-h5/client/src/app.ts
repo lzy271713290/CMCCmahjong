@@ -42,6 +42,26 @@ const HU_WIN_VOICES = [
   "1_1_嘿嘿，这把运气直接拉满，胡啦_1.wav",
   "1_1_手气来了挡都挡不住，胡牌咯！_1.wav",
 ];
+const QUICK_VOICE_FILES = [
+  "1_1_快快出牌，别让大家久等呀_1.wav",
+  "1_1_还在思考吗，我都等好久咯_1.wav",
+  "1_1_慢慢来，好戏还在后头_1.wav",
+  "1_1_牌场无常，风水轮流转嘛_1.wav",
+  "1_1_输赢无所谓，开心最重要啦_1.wav",
+  "1_1_好家伙，这都能被你摸到_1.wav",
+  "1_1_可以可以，这一手打得漂亮_1.wav",
+  "1_1_别这么猛，给大家留条活路嘛_1.wav",
+  "1_1_哟，手气可以啊，佩服佩服_1.wav",
+  "1_1_听牌啦，就等那张关键牌_1.wav",
+  "1_1_这把有搞头，各位可要小心咯_1.wav",
+  "1_1_坐等好牌到来，看谁给我点炮_1.wav",
+  "1_1_这牌拿在手里，头都大了_1.wav",
+  "1_1_完了完了，这牌怕是很难胡了_1.wav",
+];
+
+function quickVoiceText(file: string): string {
+  return file.replace(/^1_1_/, "").replace(/_1\.wav$/, "");
+}
 const THROWABLES: Array<{ id: ThrowableId; emote: string; label: string; impact: string }> = [
   { id: "slipper", emote: "🩴", label: "拖鞋", impact: "🩴💥" },
   { id: "egg", emote: "🥚", label: "鸡蛋", impact: "🍳💥" },
@@ -130,6 +150,7 @@ const chatMessages = required<HTMLElement>("chat-messages");
 const chatForm = required<HTMLFormElement>("chat-form");
 const chatInput = required<HTMLInputElement>("chat-input");
 const chatEmotes = required<HTMLElement>("chat-emotes");
+const chatVoiceClips = required<HTMLElement>("chat-voice-clips");
 const throwEffect = required<HTMLElement>("throw-effect");
 const avatarGrid = required<HTMLElement>("avatar-grid");
 const avatarOverlay = required<HTMLElement>("avatar-overlay");
@@ -373,6 +394,12 @@ function handleMessage(message: ServerMessage): void {
     } else {
       showFloatingEmote(message.fromSeat, message.fromId, message.emote);
     }
+  } else if (message.type === "chat_voice") {
+    if (!QUICK_VOICE_FILES.includes(message.voice)) return;
+    const voiceText = quickVoiceText(message.voice);
+    appendChatEntry(message.fromSeat, message.fromId, message.fromName, message.fromAvatar, voiceText, false);
+    showChatBubble(message.fromSeat, message.fromId, voiceText);
+    audioManager.playVoiceFile(customVoicePath(message.voice), 1);
   } else if (message.type === "room_announcement") {
     showNotice(`管理员公告：${message.message}`);
   } else if (message.type === "voice_audio") {
@@ -2232,6 +2259,16 @@ chatForm.addEventListener("submit", (event) => {
   sendDirect({ type: "chat_message", text });
   chatInput.value = "";
 });
+for (const voice of QUICK_VOICE_FILES) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "chat-voice-button";
+  button.textContent = quickVoiceText(voice);
+  button.title = `发送语音：${quickVoiceText(voice)}`;
+  button.addEventListener("click", () => sendDirect({ type: "chat_voice", voice }));
+  chatVoiceClips.append(button);
+}
+
 for (const emote of ["😂", "👍", "🍀", "🔥", "🎉", "😡", "😴", "🀄"]) {
   const button = document.createElement("button");
   button.type = "button";

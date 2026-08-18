@@ -306,6 +306,11 @@ body.in-game .shell { display: none; }
 .chat-entry .chat-emote-text { font-size: 17px; }
 .chat-emotes { display: flex; flex-wrap: wrap; gap: 6px; }
 .chat-emote-button { width: auto; min-width: 34px; padding: 5px 7px; border-radius: 8px; background: rgba(255,255,255,.07); font-size: 18px; line-height: 1; }
+.chat-quick-voices { display: grid; gap: 5px; }
+.chat-quick-voice-title { color: #d7c987; font-size: 11px; font-weight: 800; text-align: left; }
+.chat-voice-clips { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; max-height: 150px; overflow: auto; }
+.chat-voice-button { width: 100%; min-height: 34px; padding: 6px 7px; border-radius: 8px; background: rgba(255,255,255,.07); color: #dce9e3; font-size: 11px; line-height: 1.3; text-align: left; }
+.chat-voice-button:hover, .chat-voice-button:focus-visible { border-color: #ffe79b; background: rgba(255,222,133,.14); color: #fff1bd; }
 .chat-form { display: flex; gap: 6px; }
 .chat-form input { padding: 9px 11px; font-size: 16px; border-radius: 8px; }
 .chat-form button { width: auto; padding: 8px 12px; font-size: 12px; border-radius: 8px; }
@@ -510,6 +515,8 @@ button.hand-tile:disabled { cursor: wait; filter: brightness(.83); }
   .seat-right .meld-rack { right: 162px; }
   .public-chat { width: min(360px, 94%); height: min(400px, 80%); font-size: 14px; }
   .chat-entry { font-size: 13px; }
+  .chat-voice-clips { max-height: 130px; }
+  .chat-voice-button { min-height: 31px; padding: 5px 6px; font-size: 10px; }
   .matrix-row { grid-template-columns: minmax(52px,1fr) repeat(4, 0.9fr) auto auto; gap: 2px; padding: 2px; font-size: 9px; }
   .matrix-cell, .matrix-cell-button, .matrix-total { min-width: 28px; }
   .score-summary { width: min(520px,72%); max-height: 82%; gap: 4px; padding: 7px 10px; }
