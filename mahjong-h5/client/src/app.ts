@@ -2452,7 +2452,7 @@ document.addEventListener("click", (event) => {
   const target = event.target as HTMLElement;
   if (target.closest("button")) audioManager.playEffect("ui");
   if (!target.closest("#audio-settings") && !target.closest("#sound-toggle")) setAudioSettingsVisible(false);
-  if (!target.closest("#public-chat") && !target.closest("#chat-toggle")) setChatVisible(false);
+  if (!target.closest("#public-chat") && !target.closest("#chat-toggle") && !target.closest("[data-action='chat']")) setChatVisible(false);
 });
 
 function setAudioSettingsVisible(visible: boolean): void {
