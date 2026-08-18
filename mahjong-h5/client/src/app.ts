@@ -352,7 +352,7 @@ function handleMessage(message: ServerMessage): void {
     );
     if (preCollectDraw) {
       collectSnapshotFeedback(previous, message.snapshot);
-      scheduleDelayedDrawRender(message.snapshot, 340);
+      scheduleDelayedDrawRender(message.snapshot, 620);
       return;
     }
     clearDelayedDrawRender();
