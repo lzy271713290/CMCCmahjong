@@ -534,7 +534,7 @@ function renderTable(next: RoomSnapshot, me: PlayerView | undefined): void {
   const viewerSeat = game.viewerSeat ?? me?.seat ?? 0;
   const isSpectator = next.viewerRole === "spectator";
   const canDiscard = game.stage === "awaiting_discard" && game.turnSeat === viewerSeat;
-  if (!canDiscard || (selectedHandTile && !(game.selfHand ?? []).includes(selectedHandTile) && game.selfDrawnTile !== selectedHandTile)) {
+  if (selectedHandTile && !(game.selfHand ?? []).includes(selectedHandTile) && game.selfDrawnTile !== selectedHandTile) {
     selectedHandTile = undefined;
   }
   roundLabel.textContent = `第${game.roundNumber}/${next.match.totalRounds}局 · ${isSpectator ? "观战视角" : `${winds[(viewerSeat - game.dealerSeat + 4) % 4]}位视角`}`;
@@ -1136,12 +1136,12 @@ function renderSelfHand(tiles: TileCode[], drawnTile: TileCode | undefined, canD
     if (index >= 0) drawn = hand.splice(index, 1)[0];
   }
   for (const code of hand) {
-    const tile = createFaceTile(code, "hand", canDiscard, canDiscard && code === restrictedTile);
+    const tile = createFaceTile(code, "hand", true, canDiscard, canDiscard && code === restrictedTile);
     if (code === selectedHandTile) tile.classList.add("selected");
     selfHand.append(tile);
   }
   if (drawn) {
-    const tile = createFaceTile(drawn, "hand", canDiscard, canDiscard && drawn === restrictedTile);
+    const tile = createFaceTile(drawn, "hand", true, canDiscard, canDiscard && drawn === restrictedTile);
     tile.classList.add("drawn");
     if (drawn === selectedHandTile) tile.classList.add("selected");
     selfHand.append(tile);
@@ -1157,7 +1157,7 @@ function syncSelectedTileUI(): void {
   });
 }
 
-function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", interactive: boolean, restricted = false): HTMLElement {
+function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", interactive: boolean, canDiscard = true, restricted = false): HTMLElement {
   const tile = document.createElement(interactive ? "button" : "div");
   if (tile instanceof HTMLButtonElement) {
     tile.type = "button";
@@ -1169,7 +1169,11 @@ function createFaceTile(code: TileCode, size: "hand" | "discard" | "meld", inter
       if (selectedHandTile !== code) {
         selectedHandTile = code;
         syncSelectedTileUI();
-        showNotice(`已选中 ${tileLabel(code)}，再次点击打出`);
+        showNotice(canDiscard ? `已选中 ${tileLabel(code)}，再次点击打出` : `已选中 ${tileLabel(code)}，轮到你后才能打出`);
+        return;
+      }
+      if (!canDiscard) {
+        showNotice("还没轮到你，不能打出");
         return;
       }
       selectedHandTile = undefined;
