@@ -791,24 +791,65 @@ function renderOperations(options: ReactionOption[], turnOptions: TurnOperationO
   operationPanel.classList.toggle("hidden", options.length === 0 && turnOptions.length === 0);
   if (options.length === 0 && turnOptions.length === 0) return;
   const labels: Record<ReactionOption["kind"], string> = { chi: "吃", peng: "碰", gang: "杠", hu: "胡" };
-  for (const option of options) {
+  const chiOptions = options.filter((option) => option.kind === "chi");
+  const directOptions = options.filter((option) => option.kind !== "chi");
+  for (const option of directOptions) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = `operation-button operation-${option.kind}`;
     const display = option.displayTiles.map(tileLabel).join(" ");
-    if (option.kind === "chi") {
-      button.classList.add("has-detail");
-      const label = document.createElement("strong");
-      label.textContent = labels[option.kind];
-      const detail = document.createElement("small");
-      detail.textContent = option.displayTiles.map(tileLabel).join("");
-      button.append(label, detail);
-    } else {
-      button.textContent = labels[option.kind];
-    }
+    button.textContent = labels[option.kind];
     button.title = display;
     button.setAttribute("aria-label", `${labels[option.kind]} ${display}`.trim());
     button.addEventListener("click", () => submitReaction(option.id, labels[option.kind]));
+    operationPanel.append(button);
+  }
+  if (chiOptions.length > 1) {
+    const chiGroup = document.createElement("div");
+    chiGroup.className = "operation-chi";
+    const chiToggle = document.createElement("button");
+    chiToggle.type = "button";
+    chiToggle.className = "operation-button operation-chi-toggle";
+    chiToggle.setAttribute("aria-haspopup", "menu");
+    chiToggle.setAttribute("aria-expanded", "false");
+    chiToggle.textContent = `吃 ${chiOptions.length}`;
+    chiToggle.title = chiOptions.map((option) => option.displayTiles.map(tileLabel).join("")).join(" / ");
+    const chiMenu = document.createElement("div");
+    chiMenu.className = "chi-options";
+    for (const option of chiOptions) {
+      const choice = document.createElement("button");
+      choice.type = "button";
+      choice.className = "chi-option";
+      choice.textContent = `吃 ${option.displayTiles.map(tileLabel).join("")}`;
+      choice.title = option.displayTiles.map(tileLabel).join(" ");
+      choice.addEventListener("click", (event) => {
+        event.stopPropagation();
+        closeChiMenus();
+        submitReaction(option.id, labels.chi);
+      });
+      chiMenu.append(choice);
+    }
+    chiToggle.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const willOpen = !chiMenu.classList.contains("open");
+      closeChiMenus();
+      if (willOpen) chiMenu.classList.add("open");
+      chiToggle.setAttribute("aria-expanded", String(willOpen));
+    });
+    chiGroup.append(chiToggle, chiMenu);
+    operationPanel.append(chiGroup);
+  } else if (chiOptions.length === 1) {
+    const option = chiOptions[0]!;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "operation-button operation-chi has-detail";
+    const label = document.createElement("strong");
+    label.textContent = labels.chi;
+    const detail = document.createElement("small");
+    detail.textContent = option.displayTiles.map(tileLabel).join("");
+    button.append(label, detail);
+    button.title = option.displayTiles.map(tileLabel).join(" ");
+    button.addEventListener("click", () => submitReaction(option.id, labels.chi));
     operationPanel.append(button);
   }
   if (options.length > 0) {
@@ -2326,6 +2367,12 @@ voiceGenderGameSelect.addEventListener("change", () => {
 fullscreenToggleButton.addEventListener("click", () => toggleFullscreen());
 function closeThrowMenus(): void {
   document.querySelectorAll<HTMLElement>(".throw-menu.open").forEach((menu) => menu.classList.remove("open"));
+  document.querySelectorAll<HTMLElement>(".player-seat.throw-menu-open").forEach((seat) => seat.classList.remove("throw-menu-open"));
+}
+
+function closeChiMenus(): void {
+  document.querySelectorAll<HTMLElement>(".chi-options.open").forEach((menu) => menu.classList.remove("open"));
+  document.querySelectorAll<HTMLButtonElement>(".operation-chi-toggle").forEach((toggle) => toggle.setAttribute("aria-expanded", "false"));
 }
 
 tableSeats.addEventListener("click", (event) => {
@@ -2340,7 +2387,10 @@ tableSeats.addEventListener("click", (event) => {
     const menu = control?.querySelector<HTMLElement>(".throw-menu");
     const wasOpen = menu?.classList.contains("open") ?? false;
     closeThrowMenus();
-    if (menu && !wasOpen) menu.classList.add("open");
+    if (menu && !wasOpen) {
+      menu.classList.add("open");
+      button.closest<HTMLElement>(".player-seat")?.classList.add("throw-menu-open");
+    }
   } else if (action === "throw-option") {
     const targetSeat = Number(button.dataset.seat);
     const throwable = button.dataset.throwable as ThrowableId | undefined;
@@ -2353,6 +2403,7 @@ tableSeats.addEventListener("click", (event) => {
 
 document.addEventListener("click", (event) => {
   if (!(event.target as HTMLElement).closest(".throw-control")) closeThrowMenus();
+  if (!(event.target as HTMLElement).closest(".operation-chi")) closeChiMenus();
 });
 chatToggleButton.addEventListener("click", () => setChatVisible(publicChat.classList.contains("hidden")));
 chatCloseButton.addEventListener("click", () => setChatVisible(false));
