@@ -254,12 +254,6 @@ body.in-game .shell { display: none; }
 
 .operation-panel { position: absolute; z-index: 32; right: 0; bottom: 17%; left: 0; display: flex; align-items: center; justify-content: center; gap: 7px; }
 .operation-button { display: grid; width: 42px; height: 42px; padding: 0; place-items: center; border: 2px solid #ffe69a; border-radius: 50%; background: radial-gradient(circle at 35% 28%, #ffe79b, #d08d20 64%, #794611); box-shadow: 0 5px 13px rgba(0,0,0,.45), inset 0 0 0 2px rgba(111,60,10,.24); color: #4b2909; font-size: 18px; font-weight: 900; text-shadow: 0 1px rgba(255,255,255,.35); }
-.operation-chi { position: relative; }
-.operation-chi-toggle { width: auto; min-width: 42px; padding-inline: 8px; border-radius: 28px; font-size: 16px; }
-.chi-options { position: absolute; z-index: 90; bottom: calc(100% + 7px); left: 50%; display: none; min-width: 76px; padding: 5px; gap: 4px; transform: translateX(-50%); border: 1px solid rgba(255,224,139,.72); border-radius: 9px; background: rgba(2,37,33,.98); box-shadow: 0 8px 22px rgba(0,0,0,.5); }
-.chi-options.open { display: grid; }
-.chi-option { min-height: 28px; padding: 4px 8px; border: 1px solid transparent; border-radius: 7px; background: rgba(255,255,255,.06); color: #f1e5bd; font-size: 11px; line-height: 1; white-space: nowrap; cursor: pointer; }
-.chi-option:hover, .chi-option:focus-visible { border-color: #ffe79b; background: rgba(255,222,133,.14); color: #fff1bd; }
 .operation-button:hover, .operation-button:focus-visible { outline: none; transform: translateY(-3px); filter: brightness(1.12); }
 .operation-button:disabled { opacity: .55; }
 .operation-button.has-detail { width: 66px; border-radius: 28px; }
